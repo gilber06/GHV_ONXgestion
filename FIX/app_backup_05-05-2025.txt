@@ -1,0 +1,859 @@
+import streamlit as st
+import sqlite3
+import pandas as pd
+import time
+from datetime import datetime, timedelta
+import urllib.parse
+try:
+    import plotly.express as px
+except ImportError:
+    st.error("Por favor, instala plotly ejecutando: pip install plotly")
+
+# 1. CONFIGURACIÓN Y PARCHE DE BASE DE DATOS
+st.set_page_config(page_title="GHV & OnXpert", layout="wide", page_icon="📈")
+
+def inicializar_db():
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("""CREATE TABLE IF NOT EXISTS clientes 
+                      (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
+                      (id INTEGER PRIMARY KEY, nombre TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
+                      (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
+                       descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
+                       costo_insumos REAL DEFAULT 0, estado TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS pagos 
+                      (id INTEGER PRIMARY KEY, orden_id INTEGER, monto_cuota REAL, 
+                       fecha_vencimiento TEXT, estado_pago TEXT)""")
+    
+    cursor.execute("PRAGMA table_info(ordenes)")
+    columnas = [info[1] for info in cursor.fetchall()]
+    if 'costo_insumos' not in columnas:
+        cursor.execute("ALTER TABLE ordenes ADD COLUMN costo_insumos REAL DEFAULT 0")
+    
+    cursor.execute("SELECT COUNT(*) FROM negocios")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO negocios (id, nombre) VALUES (?,?)", [(1, 'GHV-Service'), (2, 'OnXpert Software')])
+
+# --- NUEVOS CAMPOS FASE 1 ---
+    # Nueva tabla para venta de artículos informáticos (Hardware)
+    cursor.execute("""CREATE TABLE IF NOT EXISTS ventas_articulos 
+                      (id INTEGER PRIMARY KEY, cliente_id INTEGER, producto TEXT, 
+                       tipo_pago TEXT, monto_total REAL, costo_adquisicion REAL, 
+                       fecha_venta TEXT)""")
+    
+    # Aseguramos que la tabla clientes tenga el campo RUC/CI
+    cursor.execute("PRAGMA table_info(clientes)")
+    cols_c = [info[1] for info in cursor.fetchall()]
+    if 'ruc_ci' not in cols_c:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN ruc_ci TEXT")
+    
+    # Aseguramos que la tabla clientes tenga el campo activo
+    cursor.execute("PRAGMA table_info(clientes)")
+    cols_c = [info[1] for info in cursor.fetchall()]
+    if 'activo' not in cols_c:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN activo INTEGER DEFAULT 1")
+
+# Aseguramos que la tabla pagos tenga el campo notas (Línea 57 aprox)
+    cursor.execute("PRAGMA table_info(pagos)")
+    cols_p = [info[1] for info in cursor.fetchall()]
+    if 'notas' not in cols_p:
+        cursor.execute("ALTER TABLE pagos ADD COLUMN notas TEXT")
+
+# Creamos la tabla para la Papelera de Reciclaje (Historial de eliminación)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historial_eliminacion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            orden_id INTEGER,
+            cliente TEXT,
+            monto REAL,
+            detalle TEXT,
+            fecha_eliminacion DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)        
+
+    conn.commit()
+    conn.close()
+
+inicializar_db()
+
+# --- 2. FUNCIONES DE LÓGICA ---
+
+def registrar_venta_onxpert(cliente, empresa, telefono, desc, monto_soft, monto_memb, cuotas_memb, fecha_manual):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO clientes (nombre, apodo, telefono) VALUES (?,?,?)", (cliente, empresa, telefono))
+    cursor.execute("UPDATE clientes SET apodo = ?, telefono = ? WHERE nombre = ?", (empresa, telefono, cliente))
+    cursor.execute("SELECT id FROM clientes WHERE nombre = ?", (cliente,))
+    cliente_id = cursor.fetchone()[0]
+    
+    cursor.execute("INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) VALUES (2, ?, ?, ?, ?, 0, 'Activo')",
+                   (cliente_id, desc, fecha_manual, monto_soft + (monto_memb * cuotas_memb)))
+    orden_id = cursor.lastrowid
+    
+    pagos_soft = [
+        (orden_id, monto_soft/2, f"{fecha_manual.year}-05-06", "Pendiente"), 
+        (orden_id, monto_soft/2, f"{fecha_manual.year}-11-06", "Pendiente")
+    ]
+    cursor.executemany("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?,?,?,?)", pagos_soft)
+    
+    for i in range(cuotas_memb):
+        vencimiento = fecha_manual + timedelta(days=i*30) 
+        cursor.execute("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?,?,?,?)", 
+                       (orden_id, monto_memb, vencimiento.strftime("%Y-%m-%d"), 'Pendiente'))
+    conn.commit()
+    conn.close()
+
+def registrar_service_ghv(cliente, empresa, telefono, equipo, falla, monto_total, costo_repuestos, fecha_manual, cuotas):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO clientes (nombre, apodo, telefono) VALUES (?,?,?)", (cliente, empresa, telefono))
+    cursor.execute("UPDATE clientes SET apodo = ?, telefono = ? WHERE nombre = ?", (empresa, telefono, cliente))
+    cursor.execute("SELECT id FROM clientes WHERE nombre = ?", (cliente,))
+    cliente_id = cursor.fetchone()[0]
+    
+    cursor.execute("INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) VALUES (1, ?, ?, ?, ?, ?, 'En Proceso')", 
+                   (cliente_id, f"{equipo} - {falla}", fecha_manual, monto_total, costo_repuestos))
+    orden_id = cursor.lastrowid
+    
+    monto_cuota = monto_total / cuotas
+    for i in range(cuotas):
+        vencimiento = fecha_manual + timedelta(days=i*30)
+        cursor.execute("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?, ?, ?, 'Pendiente')", 
+                       (orden_id, monto_cuota, vencimiento.strftime("%Y-%m-%d")))
+    conn.commit()
+    conn.close()
+
+def registrar_venta_articulo(negocio_id, cliente_id, producto, tipo_pago, monto_total, costo_hardware, fecha, cuotas):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    
+    # 1. Registro en ventas (usando el negocio_id elegido)
+    cursor.execute("""INSERT INTO ventas_articulos (cliente_id, producto, tipo_pago, monto_total, costo_adquisicion, fecha_venta) 
+                      VALUES (?, ?, ?, ?, ?, ?)""", 
+                   (cliente_id, producto, tipo_pago, monto_total, costo_hardware, fecha.strftime("%Y-%m-%d")))
+    
+    # 2. Orden de trabajo vinculada al negocio seleccionado (GHV o OnXpert)
+    cursor.execute("""INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) 
+                      VALUES (?, ?, ?, ?, ?, ?, 'Venta')""", 
+                   (negocio_id, cliente_id, f"VENTA: {producto}", fecha.strftime("%Y-%m-%d"), monto_total, costo_hardware))
+    orden_id = cursor.lastrowid
+
+    # 3. Lógica de pagos
+    estado_p = 'Pendiente' if tipo_pago == 'Cuotas' else 'Pagado'
+    monto_cuota = monto_total / cuotas
+    for i in range(cuotas):
+        vencimiento = fecha + timedelta(days=i*30)
+        cursor.execute("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?, ?, ?, ?)", 
+                       (orden_id, monto_cuota, vencimiento.strftime("%Y-%m-%d"), estado_p))
+    conn.commit()
+    conn.close()
+
+    # 4. Editar clientes
+def actualizar_datos_cliente(id_cliente, nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("""UPDATE clientes 
+                      SET nombre = ?, apodo = ?, telefono = ?, ruc_ci = ? 
+                      WHERE id = ?""", 
+                   (nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc, id_cliente))
+    conn.commit()
+    conn.close()
+
+def cambiar_estado_cliente(id_cliente, activo=True):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    estado = 1 if activo else 0
+    cursor.execute("UPDATE clientes SET activo = ? WHERE id = ?", (estado, id_cliente))
+    conn.commit()
+    conn.close()
+
+# --- 3. INTERFAZ ---
+
+st.sidebar.title("GHV-Service & OnXpert Software")
+
+# --- MARCA DE DESARROLLO AL PIE DE LA SIDEBAR ---
+st.sidebar.markdown(
+    """
+    <style>
+        .sidebar-footer {
+            position: fixed;
+            bottom: 15px;
+            width: 15rem;
+            text-align: center;
+            font-size: 13px;
+            color: #555555; /* Gris oscuro para que resalte en fondo claro */
+            font-family: 'Segoe UI', sans-serif;
+            z-index: 100;
+        }
+    </style>
+    <div class="sidebar-footer">
+        <span style="opacity: 0.7;">Desarrollado por</span><br>
+        <b style="color: #000000; letter-spacing: 1px;">OnXpert™ Software 2026</b>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+menu = ["📊 Dashboard", "👥 Gestión de Clientes", "🛒 Nueva Venta / Servicio", "🗓️ Cobros Pendientes", "📝 Órdenes de Trabajo", "✅ Historial de Cobrados", "📈 Reportes Avanzados"] # <-- Agregá este último
+choice = st.sidebar.selectbox("Ir a:", menu)
+
+conn = sqlite3.connect('sistema.db')
+
+if choice == "📊 Dashboard":
+    st.title("Resumen Ejecutivo")
+    c1, c2, c3, c4 = st.columns(4)
+    pend = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pendiente'", conn).iloc[0,0] or 0
+    coba = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pagado'", conn).iloc[0,0] or 0
+    
+    # Utilidad Proyectada basada en la realidad de la tabla pagos
+    total_pagos_db = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos", conn).iloc[0,0] or 0
+    total_costos_db = pd.read_sql_query("SELECT SUM(costo_insumos) FROM ordenes", conn).iloc[0,0] or 0
+    ganancia_real = total_pagos_db - total_costos_db
+
+    c1.metric("Por Cobrar", f"{pend:,.0f} Gs")
+    c2.metric("Ya Cobrado", f"{coba:,.0f} Gs")
+    c3.metric("Utilidad Proyectada", f"{ganancia_real:,.0f} Gs")
+    c4.metric("Órdenes Activas", len(pd.read_sql_query("SELECT id FROM ordenes WHERE estado != 'Entregado'", conn)))
+
+    st.divider()
+    
+    # --- GRÁFICOS RESTAURADOS ---
+    st.subheader("📈 Ingresos Reales por Mes (Histórico)")
+    df_hist = pd.read_sql_query("""
+        SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
+        FROM pagos WHERE estado_pago = 'Pagado' GROUP BY Mes ORDER BY Mes
+    """, conn)
+    if not df_hist.empty:
+        fig_h = px.bar(df_hist, x='Mes', y='Total', title="Dinero Cobrado por Mes", color_discrete_sequence=['#2ecc71'])
+        st.plotly_chart(fig_h, use_container_width=True)
+    else:
+        st.info("Aún no hay cobros marcados como 'Pagado' para mostrar en el historial.")
+
+    st.subheader("🗓️ Proyección de Cobros Futuros")
+    df_mes = pd.read_sql_query("""
+        SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
+        FROM pagos WHERE estado_pago = 'Pendiente' GROUP BY Mes ORDER BY Mes
+    """, conn)
+    if not df_mes.empty:
+        fig = px.line(df_mes, x='Mes', y='Total', title="Flujo de Caja Pendiente", markers=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+elif choice == "🗓️ Cobros Pendientes":
+    st.title("Control de Cobros")
+    
+    # 1. Traemos los datos incluyendo el nombre y empresa para agrupar
+    df_p = pd.read_sql_query("""
+        SELECT p.id as ID, n.nombre as Negocio, 
+            COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa, 
+            c.nombre as Contacto,
+            CAST(p.monto_cuota AS INTEGER) as Monto, 
+            p.fecha_vencimiento as Vence, 
+            o.descripcion as Detalle,
+            c.telefono as Telefono, p.notas as Notas
+        FROM pagos p
+        JOIN ordenes o ON p.orden_id = o.id
+        JOIN clientes c ON o.cliente_id = c.id
+        JOIN negocios n ON o.negocio_id = n.id
+        WHERE p.estado_pago = 'Pendiente'
+        ORDER BY p.fecha_vencimiento ASC
+    """, conn)
+
+    if not df_p.empty:
+        # 2. Agrupamos por la nueva columna 'Empresa' que ya trae el nombre si no hay apodo
+        clientes_con_deuda = df_p['Empresa'].unique()
+        
+        for empresa in clientes_con_deuda:
+            # Filtramos los pagos solo de esta empresa
+            pagos_cliente = df_p[df_p['Empresa'] == empresa]
+            total_deuda_cliente = pagos_cliente['Monto'].sum()
+            
+            # Creamos el desplegable con el nombre y el total adeudado
+            with st.expander(f"👤 {empresa} - (Total Pendiente: {total_deuda_cliente:,} Gs)"):
+                
+                # --- NUEVA LÓGICA DE COLOR ---
+                def resaltar_vencidos(row):
+                    # Convertimos la fecha de la base de datos a objeto fecha para comparar
+                    vence = datetime.strptime(row['Vence'], "%Y-%m-%d").date()
+                    hoy = datetime.now().date()
+                    
+                    # Si ya venció, aplicamos fondo rojo suave y texto blanco/rojo
+                    if vence < hoy:
+                        return ['background-color: #ffcccc; color: black; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                # Aplicamos el estilo al DataFrame
+                df_estilado = pagos_cliente[['ID', 'Vence', 'Monto', 'Detalle', 'Notas']].style.apply(resaltar_vencidos, axis=1)
+                
+                # Mostramos la tabla con el estilo aplicado
+                st.dataframe(df_estilado, use_container_width=True, hide_index=True)
+                # -----------------------------
+                
+                # Botón rápido para cobrar dentro del expander
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    pago_id = st.selectbox(f"ID a gestionar ({empresa}):", pagos_cliente['ID'], key=f"sel_{empresa}")
+                    
+                    # --- NUEVOS CAMPOS DE REPROGRAMACIÓN ---
+                    c_fecha, c_nota = st.columns(2)
+                    with c_fecha:
+                        nueva_fecha = st.date_input("Mover a:", key=f"f_{empresa}")
+                    with c_nota:
+                        # Campo para escribir el motivo del cambio
+                        nota_reprog = st.text_input("Motivo:", placeholder="Ej: Pidió prórroga", key=f"n_{empresa}")
+
+                    # --- BOTONES DE ACCIÓN ---
+                    col_acciones = st.columns(2)
+                    
+                    with col_acciones[0]:
+                        if st.button(f"✅ Cobrar ID {pago_id}", key=f"btn_{empresa}"):
+                            conn.execute("UPDATE pagos SET estado_pago = 'Pagado' WHERE id = ?", (pago_id,))
+                            conn.commit()
+                            st.success("Pago registrado.")
+                            time.sleep(1)
+                            st.rerun()
+
+                    with col_acciones[1]:
+                        if st.button(f"📅 Reprogramar ID {pago_id}", key=f"reprog_{empresa}"):
+                            with sqlite3.connect('sistema.db') as conn_reprog:
+                                # Guardamos la nueva fecha y la nota en mayúsculas
+                                conn_reprog.execute("""
+                                    UPDATE pagos 
+                                    SET fecha_vencimiento = ?, notas = ? 
+                                    WHERE id = ?
+                                """, (nueva_fecha.strftime("%Y-%m-%d"), nota_reprog.upper(), pago_id))
+                                conn_reprog.commit()
+                            st.success(f"Vencimiento movido al {nueva_fecha}")
+                            time.sleep(1)
+                            st.rerun()
+                
+                with col_btn2:
+                    # 1. Obtenemos los datos del pago seleccionado
+                    r_wa = pagos_cliente[pagos_cliente['ID'] == pago_id].iloc[0]
+                    
+                    # 2. Armamos el borrador del mensaje (aquí podés personalizar el texto)
+                    msg = (f"Estimado cliente de {r_wa['Negocio']},\n\n"
+                           f"Le enviamos un recordatorio de su cuota pendiente:\n"
+                           f"📌 Detalle: {r_wa['Detalle']}\n"
+                           f"💰 Monto: {r_wa['Monto']:,.0f} Gs.\n"
+                           f"📅 Vencimiento: {r_wa['Vence']}\n\n"
+                           "¡Saludos!")
+                    
+                    # 3. MOSTRAR PREVISUALIZACIÓN DISCRETA
+                    st.markdown("---")
+                    st.caption("🔍 Previsualización del mensaje:")
+                    st.info(msg) # Esto crea el cuadro azul con el texto previo
+                    
+                    # 4. Botón de envío con el link generado
+                    tel = str(r_wa['Telefono']).replace(" ", "").replace("+", "")
+                    link = f"https://wa.me/{tel}?text={urllib.parse.quote(msg)}"
+                    
+                    st.markdown(f"[📲 Enviar WhatsApp a {empresa}]( {link} )", unsafe_allow_html=True)
+
+    else:
+        st.info("No hay cobros pendientes por el momento.")
+
+    # Mantenemos la zona de limpieza abajo por si acaso
+    st.markdown("---")
+    with st.expander("⚠️ Zona de Limpieza (Solo errores de carga)"):
+        id_borrar = st.number_input("ID del pago a eliminar", min_value=0, step=1)
+        if st.button("🗑️ Eliminar Permanentemente"):
+            conn.execute("DELETE FROM pagos WHERE id = ?", (id_borrar,))
+            conn.commit()
+            st.rerun()
+
+elif choice == "👥 Gestión de Clientes":
+    st.title("Gestión Centralizada de Clientes")
+    
+    tab1, tab2, tab3 = st.tabs(["➕ Registrar Nuevo", "📝 Ver / Editar", "🚫 Dar de Baja"])
+    
+    with tab1:
+        st.subheader("Cargar Cliente al Sistema")
+        with st.form("nuevo_cliente_unificado"):
+            col1, col2 = st.columns(2)
+            with col1:
+                nombre = st.text_input("Nombre y Apellido / Razón Social")
+                empresa = st.text_input("Empresa / Apodo (Ej: La Hornalla)")
+            with col2:
+                telefono = st.text_input("Teléfono / WhatsApp")
+                ruc = st.text_input("RUC o CI")
+            
+            # EL BOTÓN DEBE ESTAR DENTRO DEL FORM
+            boton_guardar = st.form_submit_button("Dar de Alta Cliente")
+
+        # LA LÓGICA DE GUARDADO FUERA DEL FORM PERO DENTRO DE TAB1
+        if boton_guardar:
+            if not nombre:
+                st.error("⚠️ El campo 'Nombre y Apellido / Razón Social' es obligatorio.")
+            else:
+                # NORMALIZACIÓN: Pasamos a mayúsculas y quitamos espacios de sobra
+                nombre_norm = nombre.strip().upper()
+                empresa_norm = empresa.strip().upper() if empresa else ""
+                ruc_norm = ruc.strip().upper() if ruc else ""
+
+                with sqlite3.connect('sistema.db') as conn_local:
+                    cursor_local = conn_local.cursor()
+                    
+                    # 1. VERIFICACIÓN DE NOMBRE (Ahora busca en mayúsculas)
+                    cursor_local.execute("SELECT id FROM clientes WHERE UPPER(nombre) = ? AND activo = 1", (nombre_norm,))
+                    existe_nombre = cursor_local.fetchone()
+                    
+                    # 2. VERIFICACIÓN DE RUC
+                    existe_ruc = None
+                    if ruc_norm:
+                        cursor_local.execute("SELECT nombre FROM clientes WHERE ruc_ci = ? AND activo = 1", (ruc_norm,))
+                        existe_ruc = cursor_local.fetchone()
+                    
+                    if existe_nombre:
+                        st.warning(f"⚠️ El cliente '{nombre_norm}' ya existe. (El sistema ignora minúsculas y espacios).")
+                    else:
+                        if existe_ruc:
+                            st.info(f"ℹ️ Nota: El RUC {ruc_norm} ya está asociado a '{existe_ruc[0]}'.")
+                        
+                        try:
+                            # Guardamos los datos ya normalizados
+                            cursor_local.execute("""
+                                INSERT INTO clientes (nombre, apodo, telefono, ruc_ci, activo) 
+                                VALUES (?, ?, ?, ?, 1)
+                            """, (nombre_norm, empresa_norm, telefono.strip(), ruc_norm))
+                            
+                            conn_local.commit()
+                            st.success(f"✅ ¡Registro exitoso! '{nombre_norm}' guardado correctamente.")
+                            import time
+                            time.sleep(1) # Pausa corta
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error al guardar: {e}")
+
+    with tab2:
+        st.subheader("Base de Datos Actual")
+        df_clientes = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono, ruc_ci FROM clientes WHERE activo = 1", conn)
+        st.dataframe(df_clientes, use_container_width=True)
+        
+        # Traemos solo los activos para la tabla principal
+        df_clientes = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono, ruc_ci FROM clientes WHERE activo = 1", conn)
+        
+        # --- BUSCADOR RÁPIDO ---
+        busqueda = st.text_input("🔍 Buscar cliente por nombre o empresa:", "")
+        if busqueda:
+            df_clientes = df_clientes[
+                df_clientes['nombre'].str.contains(busqueda, case=False, na=False) | 
+                df_clientes['Empresa'].str.contains(busqueda, case=False, na=False)
+            ]
+        
+        st.dataframe(df_clientes, use_container_width=True)
+
+#Boton de Edición clientes
+        st.markdown("---")
+        st.subheader("📝 Editar Datos de Cliente")
+
+        clientes_edicion = pd.read_sql_query("SELECT id, nombre, apodo, telefono, ruc_ci FROM clientes WHERE activo = 1", conn)
+
+        if not clientes_edicion.empty:
+            opciones_cliente = {f"{row['id']} - {row['nombre']}": row for _, row in clientes_edicion.iterrows()}
+            seleccion = st.selectbox("Seleccione el cliente para modificar:", options=list(opciones_cliente.keys()))
+            datos_actuales = opciones_cliente[seleccion]
+            
+            with st.form("form_edicion_cliente"):
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    n_nombre = st.text_input("Nombre Completo:", value=datos_actuales['nombre'])
+                    n_empresa = st.text_input("Empresa / Apodo:", value=datos_actuales['apodo'])
+                with col_e2:
+                    n_telefono = st.text_input("Teléfono:", value=datos_actuales['telefono'])
+                    n_ruc = st.text_input("RUC / CI:", value=datos_actuales['ruc_ci'] if datos_actuales['ruc_ci'] else "")
+                
+                if st.form_submit_button("Guardar Cambios"):
+                    actualizar_datos_cliente(datos_actuales['id'], n_nombre, n_empresa, n_telefono, n_ruc)
+                    st.success("¡Datos actualizados!")
+                    st.rerun()
+        else:
+            st.info("No hay clientes registrados.")
+
+    with tab3:
+        st.subheader("Desactivar Cliente")
+        st.warning("Esto ocultará al cliente de las listas de ventas, pero no borrará sus registros históricos.")
+        
+        # Consultamos los clientes que siguen activos
+        df_bajas = pd.read_sql_query("SELECT id, nombre, apodo FROM clientes WHERE activo = 1", conn)
+        
+        if not df_bajas.empty:
+            # Selector para elegir a quién dar de baja
+            opciones_baja = {f"{row['id']} - {row['nombre']} ({row['apodo']})": row['id'] for _, row in df_bajas.iterrows()}
+            cliente_a_eliminar = st.selectbox("Seleccione el cliente a desactivar:", options=list(opciones_baja.keys()))
+            
+            id_para_baja = opciones_baja[cliente_a_eliminar]
+            
+            if st.button("Confirmar Baja Definitiva"):
+                cambiar_estado_cliente(id_para_baja, activo=False)
+                st.error(f"Cliente con ID {id_para_baja} ha sido desactivado.")
+                st.rerun()
+        else:
+            st.info("No hay clientes activos para dar de baja.")
+
+elif choice == "📝 Órdenes de Trabajo":
+    st.title("Generador de Comprobantes (OT)")
+    # SQL Corregido para sumar cuotas reales
+    df_ot = pd.read_sql_query("""
+        SELECT o.id as OT, n.nombre as Negocio, c.nombre as Cliente, 
+            COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa,
+            o.descripcion as Trabajo, CAST(SUM(p.monto_cuota) AS INTEGER) as TotalReal, o.estado as Estado, c.telefono as Tel
+        FROM ordenes o
+        JOIN clientes c ON o.cliente_id = c.id
+        JOIN negocios n ON o.negocio_id = n.id
+        JOIN pagos p ON p.orden_id = o.id
+        WHERE o.estado != 'Entregado'
+        GROUP BY o.id
+        ORDER BY o.fecha_ingreso DESC
+    """, conn)
+    
+    if not df_ot.empty:
+        st.dataframe(df_ot.drop(columns=['Tel']), use_container_width=True, hide_index=True, key="tabla_ots_activa")
+        ot_sel = st.selectbox("Seleccione OT:", df_ot['OT'])
+        if st.button("Generar Mensaje de OT"):
+            r = df_ot[df_ot['OT'] == ot_sel].iloc[0]
+            txt = f"📄 *OT #{r['OT']} - {r['Empresa']}*\nCliente: {r['Cliente']}\nTrabajo: {r['Trabajo']}\nTotal Actualizado: {r['TotalReal']:,} Gs."
+            st.code(txt)
+            tel_clean = str(r['Tel']).replace(' ','').replace('+','')
+            st.markdown(f"[📲 Enviar por WhatsApp](https://wa.me/{tel_clean}?text={urllib.parse.quote(txt)})")
+    else: st.info("No hay órdenes de trabajo activas.")
+
+    st.markdown("---")
+    st.subheader("🛠️ Editar y Gestionar OT")
+
+    # Traemos las OTs incluyendo el estado actual
+    df_ot_edit = pd.read_sql_query("""
+        SELECT o.id, 
+            COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa, 
+            o.descripcion, 
+            CAST(o.monto_total AS INTEGER) as monto_total, 
+            CAST(o.costo_insumos AS INTEGER) as costo_insumos, 
+            o.estado
+        FROM ordenes o
+        JOIN clientes c ON o.cliente_id = c.id
+    """, conn)
+
+    if not df_ot_edit.empty:
+        ot_opciones = {f"OT {row['id']} - {row['Empresa']}": row for _, row in df_ot_edit.iterrows()}
+        ot_seleccionada = st.selectbox("Seleccione la OT para modificar:", options=list(ot_opciones.keys()))
+        datos_ot = ot_opciones[ot_seleccionada]
+
+        with st.form("form_edicion_completa_ot"):
+            col_ot1, col_ot2 = st.columns(2)
+            
+            # Definimos los estados que usará el sistema de ahora en adelante
+            estados_permitidos = ["Pendiente", "En Proceso", "Finalizada", "Cancelada"]
+            
+            # Buscamos el índice del estado actual de forma segura
+            estado_actual = datos_ot['estado']
+            if estado_actual not in estados_permitidos:
+                indice_default = 0
+            else:
+                indice_default = estados_permitidos.index(estado_actual)
+
+            with col_ot1:
+                # Usamos int() para asegurar que no haya decimales en el input
+                nuevo_monto = st.number_input("Monto Total:", value=int(datos_ot['monto_total']), step=50000)
+                nuevo_estado = st.selectbox("Estado del Trabajo:", options=estados_permitidos, index=indice_default)
+
+            with col_ot2:
+                # Quitamos los decimales también aquí
+                nuevo_costo = st.number_input("Costo de Insumos:", value=int(datos_ot['costo_insumos']), step=10000)
+                # Agregamos una key única para evitar que se dupliquen textos de otras OTs
+                nueva_desc = st.text_area("Descripción detallada:", value=datos_ot['descripcion'], key=f"edit_desc_{ot_seleccionada}")
+
+            # EL BOTÓN DEBE ESTAR DENTRO DEL BLOQUE 'WITH' DEL FORMULARIO
+            boton_guardar = st.form_submit_button("Guardar Cambios en OT")
+
+            # Línea 477
+        if boton_guardar:
+            try:
+                # Usamos el ID de la OT seleccionada directamente
+                id_actualizar = ot_seleccionada
+                
+                # Conexión directa y cierre automático
+                conn_edit = sqlite3.connect('sistema.db')
+                cursor_edit = conn_edit.cursor()
+                
+                sql_update = """
+                    UPDATE ordenes 
+                    SET monto_total = ?, 
+                        costo_insumos = ?, 
+                        descripcion = ?, 
+                        estado = ? 
+                    WHERE id = ?
+                """
+                # Aseguramos que los montos se guarden como enteros (sin .0)
+                valores = (int(nuevo_monto), int(nuevo_costo), nueva_desc.upper(), nuevo_estado, id_actualizar)
+                
+                cursor_edit.execute(sql_update, valores)
+                conn_edit.commit()
+                conn_edit.close()
+
+                st.success(f"✅ ¡OT {id_actualizar} actualizada correctamente!")
+                
+                # Limpiamos la caché para que la tabla de arriba se actualice al instante
+                st.cache_data.clear()
+                
+                import time
+                time.sleep(1.2)
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error al guardar en la base de datos: {e}")
+
+        # --- AJUSTE EN TU LÍNEA 579 ---
+        ot_sel = datos_ot['id']
+        st.markdown("---")
+        confirmacion = st.popover("🗑️ Eliminar esta OT")
+
+        with confirmacion:
+            st.warning(f"⚠️ ¿Estás seguro? Esta acción moverá la OT {ot_sel} a la papelera.")
+            
+            if st.button("Sí, borrar ahora"):
+                try:
+                    with sqlite3.connect('sistema.db') as conn_del:
+                        cursor_del = conn_del.cursor()
+                        
+                        # 1. RESPALDO: Guardamos en la papelera antes de borrar
+                        cursor_del.execute("""
+                            INSERT INTO historial_eliminacion (orden_id, cliente, monto, detalle)
+                            SELECT o.id, c.nombre, o.monto_total, o.descripcion
+                            FROM ordenes o 
+                            JOIN clientes c ON o.cliente_id = c.id
+                            WHERE o.id = ?
+                        """, (ot_sel,))
+
+                        # 2. BORRADO: Ahora sí eliminamos
+                        cursor_del.execute("DELETE FROM ordenes WHERE id = ?", (ot_sel,))
+                        cursor_del.execute("DELETE FROM pagos WHERE orden_id = ?", (ot_sel,))
+                        conn_del.commit()
+
+                    st.success(f"✅ OT {ot_sel} enviada a la papelera.")
+                    import time
+                    time.sleep(1)
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Error técnico: {e}")
+
+# --- ESTO VA FUERA DEL POPOVER (Abajo de la línea 601) ---
+    st.markdown("### ♻️ Recuperación")
+    with st.expander("Ver Papelera de Reciclaje"):
+        df_borrados = pd.read_sql_query("SELECT * FROM historial_eliminacion ORDER BY fecha_eliminacion DESC", sqlite3.connect('sistema.db'))
+        
+        if not df_borrados.empty:
+            st.dataframe(df_borrados)
+            ultima = df_borrados.iloc[0]
+            
+            if st.button(f"↩️ Deshacer: Recuperar OT {int(ultima['orden_id'])}"):
+                try:
+                    with sqlite3.connect('sistema.db') as conn_undo:
+                        # Restauramos la orden con los nombres de columna correctos
+                        conn_undo.execute("""
+                            INSERT INTO ordenes (id, monto_total, descripcion, estado, cliente_id, negocio_id)
+                            VALUES (?, ?, ?, 'Pendiente', 
+                                (SELECT id FROM clientes WHERE apodo = ? OR nombre = ? LIMIT 1), 
+                                (SELECT id FROM negocios LIMIT 1))
+                        """, (int(ultima['orden_id']), ultima['monto'], ultima['detalle'], ultima['cliente'], ultima['cliente']))
+                        
+                        # Limpiamos la papelera
+                        conn_undo.execute("DELETE FROM historial_eliminacion WHERE id = ?", (int(ultima['id']),))
+                        conn_undo.commit()
+                    
+                    st.success("Orden recuperada correctamente.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al recuperar: {e}")
+        else:
+            st.info("La papelera está vacía.")
+
+# --- AGREGAR DEBAJO DEL BOTÓN DE DESHACER ---
+    st.markdown("---")
+    with st.popover("🚨 Limpieza Definitiva"):
+        st.warning("¿Estás seguro de que querés vaciar la papelera? Esta acción no se puede deshacer.")
+        if st.button("Confirmar: Vaciar todo"):
+            try:
+                with sqlite3.connect('sistema.db') as conn_clear:
+                    conn_clear.execute("DELETE FROM historial_eliminacion")
+                    conn_clear.commit()
+                st.success("Papelera vaciada con éxito.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al vaciar: {e}")            
+
+elif choice == "✅ Historial de Cobrados":
+    st.title("Registro Histórico de Ingresos")
+    # --- HISTORIAL RESTAURADO ---
+    df_h = pd.read_sql_query("""
+        SELECT p.fecha_vencimiento as Fecha, n.nombre as Negocio, c.nombre as Cliente, c.apodo as Empresa, p.monto_cuota as Cobrado
+        FROM pagos p JOIN ordenes o ON p.orden_id = o.id JOIN clientes c ON o.cliente_id = c.id
+        JOIN negocios n ON o.negocio_id = n.id WHERE p.estado_pago = 'Pagado' ORDER BY Fecha DESC
+    """, conn)
+    if not df_h.empty:
+        st.dataframe(df_h, use_container_width=True, hide_index=True)
+    else:
+        st.info("El historial está vacío. Los pagos aparecerán aquí una vez que los confirmes en 'Cobros Pendientes'.")
+
+# Reemplaza desde la línea 348 hasta el final
+elif choice == "🛒 Nueva Venta / Servicio":
+    st.title("Cargar Nueva Operación")
+    
+    # Selector de Facturación (Negocio)
+    negocio_nom = st.radio("Facturar con:", ["GHV - Service", "OnXpert Software"], horizontal=True)
+    n_id = 1 if negocio_nom == "GHV - Service" else 2
+    
+    # Filtramos solo clientes activos
+    df_c = pd.read_sql_query("SELECT id, apodo || ' - ' || nombre as cliente_display FROM clientes WHERE activo = 1", conn)
+    
+    if not df_c.empty:
+        cliente_dict = dict(zip(df_c['cliente_display'], df_c['id']))
+        c_sel = st.selectbox("Seleccionar Cliente:", options=list(cliente_dict.keys()))
+
+        tipo_op = st.selectbox("¿Qué vas a registrar?", [
+            "🛒 Venta de Artículo (Hardware)", 
+            "🔧 Servicio Técnico (GHV)", 
+            "💻 Software / Membresía (OnXpert)"
+        ])
+
+        # --- SECCIÓN 1: HARDWARE (Como estaba en image_c5bd57.png) ---
+        if tipo_op == "🛒 Venta de Artículo (Hardware)":
+            tipo_v = st.radio("Condición", ["Contado", "Cuotas"], horizontal=True)
+            if tipo_v == "Cuotas":
+                cant_c = st.number_input("Cantidad de Cuotas", min_value=2, max_value=36, value=2)
+            else:
+                cant_c = 1
+            
+            with st.form("form_hardware_detalles"):
+                prod = st.text_input("Producto")
+                c1, c2 = st.columns(2)
+                monto_v = c1.number_input("Precio Venta", min_value=0)
+                costo_h = c2.number_input("Costo Compra", min_value=0)
+                f_v = st.date_input("Fecha", value=datetime.now().date())
+                enviar = st.form_submit_button("Confirmar Venta")
+            
+            if enviar:
+                try:
+                    with sqlite3.connect('sistema.db') as conn_op:
+                        cursor_op = conn_op.cursor()
+                        cursor_op.execute("""
+                            INSERT INTO ordenes (negocio_id, cliente_id, descripcion, monto_total, fecha_ingreso, estado)
+                            VALUES (?, ?, ?, ?, ?, 'Venta')
+                        """, (n_id, cliente_dict[c_sel], prod.upper(), monto_v, f_v))
+                        orden_id = cursor_op.lastrowid
+                        monto_cuota = monto_v / cant_c
+                        for i in range(int(cant_c)):
+                            vencimiento = f_v + timedelta(days=i*30)
+                            cursor_op.execute("""
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago)
+                                VALUES (?, ?, ?, 'Pendiente')
+                            """, (orden_id, monto_cuota, vencimiento.strftime("%Y-%m-%d")))
+                        conn_op.commit()
+                    st.success(f"✅ Venta registrada: {int(cant_c)} cuota(s).")
+                    time.sleep(1); st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
+        # --- SECCIÓN 2: SERVICIO TÉCNICO (Como estaba en image_c56b58.png) ---
+        elif tipo_op == "🔧 Servicio Técnico (GHV)":
+            eq = st.text_input("Equipo")
+            fa = st.text_input("Falla")
+            c1, c2 = st.columns(2)
+            p = c1.number_input("Precio Final", min_value=0)
+            c_rep = c2.number_input("Costo Repuestos", min_value=0)
+            cant_c = st.number_input("Cuotas", min_value=1, value=1)
+            f_v = st.date_input("Fecha", value=datetime.now().date())
+            
+            if st.form_submit_button("Registrar Servicio") if 'form_servicio' in locals() else st.button("Registrar Servicio"):
+                # Aquí llamamos a tu función original
+                registrar_service_ghv(c_sel.split(' - ')[1], c_sel.split(' - ')[0], "", eq, fa, p, c_rep, f_v, int(cant_c))
+                st.success("Servicio registrado."); time.sleep(1); st.rerun()
+
+        # --- SECCIÓN 3: SOFTWARE / MEMBRESÍA (Como estaba en image_c56b58.png) ---
+        elif tipo_op == "💻 Software / Membresía (OnXpert)":
+            soft = st.text_input("Nombre del Sistema")
+            c1, c2 = st.columns(2)
+            ms = c1.number_input("Costo Software", min_value=0)
+            mm = c2.number_input("Membresía Mensual", min_value=0)
+            
+            # Agregamos la opción de fechas manuales solo para este caso especial
+            modo_pago = st.radio("Tipo de Cobro", ["Membresía Mensual", "Pagos Programados (Ej: La Hornalla)"])
+            meses = st.slider("Cantidad de meses o pagos", 1, 12, 1)
+            
+            fechas_personalizadas = []
+            if modo_pago == "Pagos Programados (Ej: La Hornalla)":
+                st.write("Seleccioná las fechas para cada pago:")
+                cols = st.columns(min(meses, 3))
+                for i in range(meses):
+                    f_p = cols[i % 3].date_input(f"Pago {i+1}", value=datetime.now().date(), key=f"f_p_{i}")
+                    fechas_personalizadas.append(f_p)
+            
+            f_v = st.date_input("Fecha Inicio", value=datetime.now().date())
+
+            if st.button("Registrar Software"):
+                # Llamamos a tu función original
+                # NOTA: Si necesitás guardar las fechas personalizadas, tu función 'registrar_venta_onxpert' 
+                # debería ser ajustada, pero por ahora la llamamos como estaba antes para no romper nada.
+                registrar_venta_onxpert(c_sel.split(' - ')[1], c_sel.split(' - ')[0], "", soft, ms, mm, meses, f_v)
+                st.success("Software registrado correctamente."); time.sleep(1); st.rerun()
+
+    else:
+        st.warning("Primero debés dar de alta un cliente en 'Gestión de Clientes'.")
+
+#REPORTES AVANZADOS
+elif choice == "📈 Reportes Avanzados":
+    st.title("Centro de Reportes y Análisis")
+    
+    tab_r1, tab_r2 = st.tabs(["💰 Rentabilidad por Negocio", "👤 Comportamiento de Clientes"])
+    
+    with tab_r1:
+        st.subheader("Análisis de Margen y Ganancias")
+        # SQL para comparar ingresos vs costos por negocio
+        # SQL ACTUALIZADO: Sumamos la tabla 'pagos' para reflejar el dinero real en cuotas
+        df_rent = pd.read_sql_query("""
+            SELECT 
+                n.nombre as Negocio, 
+                SUM(p.monto_cuota) as Ingresos_Totales,
+                SUM(o.costo_insumos) as Costos_Totales,
+                (SUM(p.monto_cuota) - SUM(o.costo_insumos)) as Utilidad_Neta
+            FROM pagos p
+            JOIN ordenes o ON p.orden_id = o.id
+            JOIN negocios n ON o.negocio_id = n.id
+            GROUP BY n.nombre
+        """, conn)
+        
+        if not df_rent.empty:
+            col_r1, col_r2 = st.columns([1, 2])
+            with col_r1:
+                st.dataframe(df_rent, hide_index=True)
+            with col_r2:
+                fig_rent = px.pie(df_rent, values='Utilidad_Neta', names='Negocio', 
+                                 title="Distribución de Utilidad Neta",
+                                 color_discrete_sequence=['#3498db', '#e67e22'])
+                st.plotly_chart(fig_rent, use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para calcular rentabilidad.")
+
+    with tab_r2:
+        st.subheader("Top Clientes (Por Volumen de Compra)")
+        # SQL para ver quiénes son tus mejores clientes
+        # SQL para ver el volumen real basado en la suma de TODAS las cuotas
+        df_top = pd.read_sql_query("""
+            SELECT c.apodo as Empresa, 
+                   SUM(p.monto_cuota) as Total_Invertido
+            FROM clientes c
+            JOIN ordenes o ON c.id = o.cliente_id
+            JOIN pagos p ON o.id = p.orden_id
+            GROUP BY c.apodo
+            ORDER BY Total_Invertido DESC
+        """, conn)
+        
+        if not df_top.empty:
+            fig_top = px.bar(df_top, x='Total_Invertido', y='Empresa', orientation='h',
+                            title="Top 10 Clientes que más facturan",
+                            text_auto='.2s', color='Total_Invertido',
+                            color_continuous_scale='Viridis')
+            st.plotly_chart(fig_top, use_container_width=True)
+        else:
+            st.info("Aún no hay registros de ventas para rankear clientes.")

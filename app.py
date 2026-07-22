@@ -1,0 +1,1087 @@
+import streamlit as st
+import sqlite3
+import pandas as pd
+import time
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import urllib.parse
+try:
+    import plotly.express as px
+except ImportError:
+    st.error("Por favor, instala plotly ejecutando: pip install plotly")
+
+# 1. CONFIGURACIÓN Y PARCHE DE BASE DE DATOS
+st.set_page_config(page_title="GHV & OnXpert", layout="wide", page_icon="📈")
+
+def inicializar_db():
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("""CREATE TABLE IF NOT EXISTS clientes 
+                      (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
+                      (id INTEGER PRIMARY KEY, nombre TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
+                      (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
+                       descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
+                       costo_insumos REAL DEFAULT 0, estado TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS pagos 
+                      (id INTEGER PRIMARY KEY, orden_id INTEGER, monto_cuota REAL, 
+                       fecha_vencimiento TEXT, estado_pago TEXT)""")
+    
+    cursor.execute("PRAGMA table_info(ordenes)")
+    columnas = [info[1] for info in cursor.fetchall()]
+    if 'costo_insumos' not in columnas:
+        cursor.execute("ALTER TABLE ordenes ADD COLUMN costo_insumos REAL DEFAULT 0")
+    
+    cursor.execute("SELECT COUNT(*) FROM negocios")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO negocios (id, nombre) VALUES (?,?)", [(1, 'GHV-Service'), (2, 'OnXpert Software')])
+
+    # --- NUEVOS CAMPOS FASE 1 ---
+    cursor.execute("""CREATE TABLE IF NOT EXISTS ventas_articulos 
+                      (id INTEGER PRIMARY KEY, cliente_id INTEGER, producto TEXT, 
+                       tipo_pago TEXT, monto_total REAL, costo_adquisicion REAL, 
+                       fecha_venta TEXT)""")
+    
+    cursor.execute("PRAGMA table_info(clientes)")
+    cols_c = [info[1] for info in cursor.fetchall()]
+    if 'ruc_ci' not in cols_c:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN ruc_ci TEXT")
+    
+    if 'activo' not in cols_c:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN activo INTEGER DEFAULT 1")
+
+    cursor.execute("PRAGMA table_info(pagos)")
+    cols_p = [info[1] for info in cursor.fetchall()]
+    if 'notas' not in cols_p:
+        cursor.execute("ALTER TABLE pagos ADD COLUMN notas TEXT")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historial_eliminacion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            orden_id INTEGER,
+            cliente TEXT,
+            monto REAL,
+            detalle TEXT,
+            fecha_eliminacion DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)        
+
+    # --- TABLA DE INVENTARIO / PRODUCTOS (GHV) ---
+    cursor.execute("""CREATE TABLE IF NOT EXISTS productos 
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                       categoria TEXT, 
+                       marca TEXT, 
+                       capacidad_especificacion TEXT, 
+                       stock INTEGER DEFAULT 0, 
+                       precio_costo REAL DEFAULT 0, 
+                       precio_venta REAL DEFAULT 0)""")
+
+    conn.commit()
+    conn.close()
+
+inicializar_db()
+
+# --- 2. FUNCIONES DE LÓGICA ---
+
+def registrar_venta_onxpert(cliente, empresa, telefono, desc, monto_soft, monto_memb, cuotas_memb, fecha_manual):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO clientes (nombre, apodo, telefono) VALUES (?,?,?)", (cliente, empresa, telefono))
+    cursor.execute("UPDATE clientes SET apodo = ?, telefono = ? WHERE nombre = ?", (empresa, telefono, cliente))
+    cursor.execute("SELECT id FROM clientes WHERE nombre = ?", (cliente,))
+    cliente_id = cursor.fetchone()[0]
+    
+    cursor.execute("INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) VALUES (2, ?, ?, ?, ?, 0, 'Activo')",
+                   (cliente_id, desc, fecha_manual, monto_soft + (monto_memb * cuotas_memb)))
+    orden_id = cursor.lastrowid
+    
+    pagos_soft = [
+        (orden_id, monto_soft/2, f"{fecha_manual.year}-05-06", "Pendiente"), 
+        (orden_id, monto_soft/2, f"{fecha_manual.year}-11-06", "Pendiente")
+    ]
+    cursor.executemany("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?,?,?,?)", pagos_soft)
+    
+    for i in range(cuotas_memb):
+        vencimiento = fecha_manual + timedelta(days=i*30) 
+        cursor.execute("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?,?,?,?)", 
+                       (orden_id, monto_memb, vencimiento.strftime("%Y-%m-%d"), 'Pendiente'))
+    conn.commit()
+    conn.close()
+
+def registrar_venta_articulo(negocio_id, cliente_id, producto, tipo_pago, monto_total, costo_hardware, fecha, cuotas):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    
+    cursor.execute("""INSERT INTO ventas_articulos (cliente_id, producto, tipo_pago, monto_total, costo_adquisicion, fecha_venta) 
+                      VALUES (?, ?, ?, ?, ?, ?)""", 
+                   (cliente_id, producto, tipo_pago, monto_total, costo_hardware, fecha.strftime("%Y-%m-%d")))
+    
+    cursor.execute("""INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) 
+                      VALUES (?, ?, ?, ?, ?, ?, 'Venta')""", 
+                   (negocio_id, cliente_id, f"VENTA: {producto}", fecha.strftime("%Y-%m-%d"), monto_total, costo_hardware))
+    orden_id = cursor.lastrowid
+
+    estado_p = 'Pendiente' if tipo_pago == 'Cuotas' else 'Pagado'
+    monto_cuota = monto_total / cuotas
+    for i in range(cuotas):
+        vencimiento = fecha + timedelta(days=i*30)
+        cursor.execute("INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago) VALUES (?, ?, ?, ?)", 
+                       (orden_id, monto_cuota, vencimiento.strftime("%Y-%m-%d"), estado_p))
+    conn.commit()
+    conn.close()
+
+def actualizar_datos_cliente(id_cliente, nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    cursor.execute("""UPDATE clientes 
+                      SET nombre = ?, apodo = ?, telefono = ?, ruc_ci = ? 
+                      WHERE id = ?""", 
+                   (nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc, id_cliente))
+    conn.commit()
+    conn.close()
+
+def cambiar_estado_cliente(id_cliente, activo=True):
+    conn = sqlite3.connect('sistema.db')
+    cursor = conn.cursor()
+    estado = 1 if activo else 0
+    cursor.execute("UPDATE clientes SET activo = ? WHERE id = ?", (estado, id_cliente))
+    conn.commit()
+    conn.close()
+
+# --- 3. INTERFAZ ---
+
+st.sidebar.title("GHV-Service & OnXpert Software")
+
+st.sidebar.markdown(
+    """
+    <style>
+        .sidebar-footer {
+            position: fixed;
+            bottom: 15px;
+            width: 15rem;
+            text-align: center;
+            font-size: 13px;
+            color: #555555;
+            font-family: 'Segoe UI', sans-serif;
+            z-index: 100;
+        }
+    </style>
+    <div class="sidebar-footer">
+        <span style="opacity: 0.7;">Desarrollado por</span><br>
+        <b style="color: #000000; letter-spacing: 1px;">OnXpert™ Software 2026</b>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+menu = ["📊 Dashboard", "👥 Gestión de Clientes", "🛒 Nueva Venta / Servicio", "🗓️ Cobros Pendientes", "📝 Órdenes de Trabajo", "✅ Historial de Cobrados", "📈 Reportes Avanzados", "📦 Inventario / Stock"]
+choice = st.sidebar.selectbox("Ir a:", menu)
+
+conn = sqlite3.connect('sistema.db')
+
+if choice == "📊 Dashboard":
+    st.title("Resumen Ejecutivo")
+    c1, c2, c3, c4 = st.columns(4)
+    pend = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pendiente'", conn).iloc[0,0] or 0
+    coba = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pagado'", conn).iloc[0,0] or 0
+    
+    total_pagos_db = pd.read_sql_query("SELECT SUM(monto_cuota) FROM pagos", conn).iloc[0,0] or 0
+    total_costos_db = pd.read_sql_query("SELECT SUM(costo_insumos) FROM ordenes", conn).iloc[0,0] or 0
+    ganancia_real = total_pagos_db - total_costos_db
+
+    c1.metric("Por Cobrar", f"{pend:,.0f} Gs")
+    c2.metric("Ya Cobrado", f"{coba:,.0f} Gs")
+    c3.metric("Utilidad Proyectada", f"{ganancia_real:,.0f} Gs")
+    c4.metric("Órdenes Activas", len(pd.read_sql_query("SELECT id FROM ordenes WHERE estado != 'Entregado'", conn)))
+
+    st.divider()
+    
+    st.subheader("📈 Ingresos Reales por Mes (Histórico)")
+    df_hist = pd.read_sql_query("""
+        SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
+        FROM pagos WHERE estado_pago = 'Pagado' GROUP BY Mes ORDER BY Mes
+    """, conn)
+    if not df_hist.empty:
+        fig_h = px.bar(df_hist, x='Mes', y='Total', title="Dinero Cobrado por Mes", color_discrete_sequence=['#2ecc71'])
+        st.plotly_chart(fig_h, use_container_width=True)
+    else:
+        st.info("Aún no hay cobros marcados como 'Pagado' para mostrar en el historial.")
+
+    st.subheader("🗓️ Proyección de Cobros Futuros")
+    df_mes = pd.read_sql_query("""
+        SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
+        FROM pagos WHERE estado_pago = 'Pendiente' GROUP BY Mes ORDER BY Mes
+    """, conn)
+    if not df_mes.empty:
+        fig = px.line(df_mes, x='Mes', y='Total', title="Flujo de Caja Pendiente", markers=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+elif choice == "🗓️ Cobros Pendientes":
+    st.title("Control de Cobros")
+ 
+    df_p = pd.read_sql_query("""
+        SELECT p.id as ID, 
+               COALESCE(n.nombre, 'Sin Negocio') as Negocio,
+               COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa,
+               c.nombre as Contacto,
+               p.monto_cuota as Monto,
+               p.fecha_vencimiento as Vence,
+               o.descripcion as Detalle,
+               c.telefono as Telefono, 
+               p.notas as Notas
+        FROM pagos p
+        JOIN ordenes o ON p.orden_id = o.id
+        JOIN clientes c ON o.cliente_id = c.id
+        LEFT JOIN negocios n ON o.negocio_id = n.id
+        WHERE p.estado_pago = 'Pendiente'
+        ORDER BY p.fecha_vencimiento ASC
+    """, conn)
+
+    if not df_p.empty:
+        clientes_con_deuda = df_p['Empresa'].unique()
+        
+        for empresa in clientes_con_deuda:
+            pagos_cliente = df_p[df_p['Empresa'] == empresa]
+            total_deuda_cliente = pagos_cliente['Monto'].sum()
+            
+            with st.expander(f"👤 {empresa} - (Total Pendiente: {int(total_deuda_cliente):,} Gs)".replace(",", ".")):
+                pagos_vista = pagos_cliente.copy()
+                pagos_vista['Notas'] = pagos_vista['Notas'].fillna("") 
+                
+                def resaltar_vencidos(row):
+                    vence = datetime.strptime(row['Vence'], "%Y-%m-%d").date()
+                    hoy = datetime.now().date()
+                    if vence < hoy:
+                        return ['background-color: #ffcccc; color: black; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                df_estilado = pagos_vista[['ID', 'Vence', 'Monto', 'Detalle', 'Notas']].style.apply(resaltar_vencidos, axis=1).format({"Monto": "{:,.0f} Gs."})
+                st.dataframe(df_estilado, use_container_width=True, hide_index=True)                
+
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    pago_id = st.selectbox(f"ID a gestionar ({empresa}):", pagos_cliente['ID'], key=f"sel_{empresa}")
+                    
+                    c_fecha, c_nota = st.columns(2)
+                    with c_fecha:
+                        nueva_fecha = st.date_input("Mover a:", key=f"f_{empresa}")
+                    with c_nota:
+                        nota_reprog = st.text_input("Motivo:", placeholder="Ej: Pidió prórroga", key=f"n_{empresa}")
+
+                    col_acciones = st.columns(2)
+                    with col_acciones[0]:
+                        if st.button(f"✅ Cobrar ID {pago_id}", key=f"btn_{empresa}"):
+                            conn.execute("UPDATE pagos SET estado_pago = 'Pagado' WHERE id = ?", (pago_id,))
+                            conn.commit()
+                            st.success("Pago registrado.")
+                            time.sleep(1)
+                            st.rerun()
+
+                    with col_acciones[1]:
+                        if st.button(f"📅 Reprogramar ID {pago_id}", key=f"reprog_{empresa}"):
+                            with sqlite3.connect('sistema.db') as conn_reprog:
+                                conn_reprog.execute("""
+                                    UPDATE pagos 
+                                    SET fecha_vencimiento = ?, notas = ? 
+                                    WHERE id = ?
+                                """, (nueva_fecha.strftime("%Y-%m-%d"), nota_reprog.upper(), pago_id))
+                                conn_reprog.commit()
+                            st.success(f"Vencimiento movido al {nueva_fecha}")
+                            time.sleep(1)
+                            st.rerun()
+                
+                with col_btn2:
+                    r_wa = pagos_cliente[pagos_cliente['ID'] == pago_id].iloc[0]
+                    monto_wa = f"{int(r_wa['Monto']):,}".replace(",", ".")
+                    
+                    msg = (f"Estimado cliente de {r_wa['Negocio']},\n\n"
+                           f"Le enviamos un recordatorio de su cuota pendiente:\n"
+                           f"📌 Detalle: {r_wa['Detalle']}\n"
+                           f"💰 Monto: {monto_wa} Gs.\n"
+                           f"📅 Vencimiento: {r_wa['Vence']}\n\n"
+                           "¡Saludos!")
+                    
+                    st.markdown("---")
+                    st.caption("🔍 Previsualización del mensaje:")
+                    st.info(msg)
+                    
+                    tel = str(r_wa['Telefono']).replace(" ", "").replace("+", "")
+                    link = f"https://wa.me/{tel}?text={urllib.parse.quote(msg)}"
+                    st.markdown(f"[📲 Enviar WhatsApp a {empresa}]( {link} )", unsafe_allow_html=True)
+
+        total_general = df_p['Monto'].sum()
+        st.divider()
+        st.metric("Total General a Cobrar", f"{int(total_general):,} Gs.".replace(",", "."))
+
+    else:
+        st.info("No hay cobros pendientes por el momento.")
+
+    st.markdown("---")
+    with st.expander("⚠️ Zona de Limpieza (Solo errores de carga)"):
+        id_borrar = st.number_input("ID del pago a eliminar", min_value=0, step=1)
+        if st.button("🗑️ Eliminar Permanentemente"):
+            conn.execute("DELETE FROM pagos WHERE id = ?", (id_borrar,))
+            conn.commit()
+            st.rerun()
+
+elif choice == "👥 Gestión de Clientes":
+    st.title("Gestión Centralizada de Clientes")
+    
+    tab1, tab2, tab3 = st.tabs(["➕ Registrar Nuevo", "📝 Ver / Editar", "🚫 Dar de Baja"])
+    
+    with tab1:
+        st.subheader("Cargar Cliente al Sistema")
+        with st.form("nuevo_cliente_unificado", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                nombre = st.text_input("Nombre y Apellido / Razón Social")
+                empresa = st.text_input("Empresa / Apodo (Ej: La Hornalla)")
+            with col2:
+                telefono = st.text_input("Teléfono / WhatsApp")
+                ruc = st.text_input("RUC o CI")
+            
+            boton_guardar = st.form_submit_button("Dar de Alta Cliente")
+
+        if boton_guardar:
+            if not nombre:
+                st.error("⚠️ El campo 'Nombre y Apellido / Razón Social' es obligatorio.")
+            else:
+                nombre_norm = nombre.strip().upper()
+                empresa_norm = empresa.strip().upper() if empresa else ""
+                ruc_norm = ruc.strip().upper() if ruc else ""
+
+                with sqlite3.connect('sistema.db') as conn_local:
+                    cursor_local = conn_local.cursor()
+                    cursor_local.execute("SELECT id FROM clientes WHERE UPPER(nombre) = ? AND activo = 1", (nombre_norm,))
+                    existe_nombre = cursor_local.fetchone()
+
+                    existe_ruc = None
+                    if ruc_norm:
+                        cursor_local.execute("SELECT nombre FROM clientes WHERE ruc_ci = ? AND activo = 1", (ruc_norm,))
+                        existe_ruc = cursor_local.fetchone()
+
+                    if existe_nombre:
+                        st.warning(f"⚠️ El cliente '{nombre_norm}' ya existe.")
+                    else:
+                        if existe_ruc:
+                            st.info(f"ℹ️ Nota: El RUC {ruc_norm} ya está asociado a '{existe_ruc[0]}'.")
+                        
+                        try:
+                            cursor_local.execute("""
+                                INSERT INTO clientes (nombre, apodo, telefono, ruc_ci, activo)
+                                VALUES (?, ?, ?, ?, 1)
+                            """, (nombre_norm, empresa_norm, telefono.strip(), ruc_norm))
+                            conn_local.commit()
+                            st.success(f"✅ ¡Registro exitoso! '{nombre_norm}' guardado correctamente.")
+                        except Exception as e:
+                            st.error(f"❌ Error al guardar: {e}")
+
+    with tab2:
+        st.subheader("Base de Datos Actual")
+        df_clientes = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono, ruc_ci FROM clientes WHERE activo = 1 AND nombre != 'ELIMINAR'", conn)
+
+        busqueda = st.text_input("🔍 Buscar cliente por nombre o empresa:", "")
+        if busqueda:
+            df_clientes = df_clientes[
+                df_clientes['nombre'].str.contains(busqueda, case=False, na=False) |
+                df_clientes['Empresa'].str.contains(busqueda, case=False, na=False)
+            ]
+        df_clientes = df_clientes.drop_duplicates(subset=['id']).reset_index(drop=True)
+        st.dataframe(df_clientes, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📝 Editar Datos de Cliente")
+
+        clientes_edicion = pd.read_sql_query("SELECT id, nombre, apodo, telefono, ruc_ci FROM clientes WHERE activo = 1 GROUP BY id, nombre", conn)
+
+        if not clientes_edicion.empty:
+            opciones_cliente = {}
+            for _, row in clientes_edicion.iterrows():
+                clave = f"{row['id']} - {row['nombre']}"
+                opciones_cliente[clave] = {
+                    'id': row['id'],
+                    'nombre': row['nombre'],
+                    'apodo': row['apodo'],
+                    'telefono': row['telefono'],
+                    'ruc_ci': row['ruc_ci']
+                }
+            
+            seleccion = st.selectbox("Seleccione el cliente para modificar:", options=list(opciones_cliente.keys()))
+            datos_actuales = opciones_cliente[seleccion]
+            
+            with st.form("form_edicion_cliente"):
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    n_nombre = st.text_input("Nombre Completo:", value=datos_actuales['nombre'])
+                    n_empresa = st.text_input("Empresa / Apodo:", value=datos_actuales['apodo'])
+                with col_e2:
+                    n_telefono = st.text_input("Teléfono:", value=datos_actuales['telefono'])
+                    n_ruc = st.text_input("RUC / CI:", value=datos_actuales['ruc_ci'] if datos_actuales['ruc_ci'] else "")
+                
+                if st.form_submit_button("Guardar Cambios"):
+                    actualizar_datos_cliente(datos_actuales['id'], n_nombre, n_empresa, n_telefono, n_ruc)
+                    st.success("¡Datos actualizados!")
+                    st.rerun()
+        else:
+            st.info("No hay clientes registrados.")
+
+    with tab3:
+        st.subheader("Desactivar Cliente")
+        st.warning("Esto ocultará al cliente de las listas de ventas, pero no borrará sus registros históricos.")
+        
+        df_bajas = pd.read_sql_query("SELECT id, nombre, apodo FROM clientes WHERE activo = 1", conn)
+        
+        if not df_bajas.empty:
+            opciones_baja = {f"{row['id']} - {row['nombre']} ({row['apodo']})": row['id'] for _, row in df_bajas.iterrows()}
+            cliente_a_eliminar = st.selectbox("Seleccione el cliente a desactivar:", options=list(opciones_baja.keys()))
+            id_para_baja = opciones_baja[cliente_a_eliminar]
+            
+            if st.button("Confirmar Baja Definitiva"):
+                cambiar_estado_cliente(id_para_baja, activo=False)
+                st.error(f"Cliente con ID {id_para_baja} ha sido desactivado.")
+                st.rerun()
+        else:
+            st.info("No hay clientes activos para dar de baja.")
+
+elif choice == "📝 Órdenes de Trabajo":
+    st.title("Generador de Comprobantes (OT)")
+    df_ot = pd.read_sql_query("""
+        SELECT 
+            o.id as OT,
+            n.nombre as Negocio,
+            c.nombre as Cliente,
+            COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa,
+            o.descripcion as Trabajo,
+            CAST(o.monto_total AS INTEGER) as TotalReal,
+            o.estado as Estado,
+            c.telefono as Tel
+        FROM ordenes o
+        JOIN clientes c ON o.cliente_id = c.id
+        JOIN negocios n ON o.negocio_id = n.id
+        WHERE o.estado != 'Entregado'
+        GROUP BY o.id
+    """, conn)
+    
+    if not df_ot.empty:
+        st.dataframe(df_ot.drop(columns=['Tel']), use_container_width=True, hide_index=True, key="tabla_ots_activa")
+        ot_sel = st.selectbox("Seleccione OT:", df_ot['OT'])
+        if st.button("Generar Mensaje de OT"):
+            r = df_ot[df_ot['OT'] == ot_sel].iloc[0]
+            txt = f"📄 *OT #{r['OT']} - {r['Empresa']}*\nCliente: {r['Cliente']}\nTrabajo: {r['Trabajo']}\nTotal Actualizado: {int(r['TotalReal']):,} Gs."
+            st.code(txt)
+            tel_clean = str(r['Tel']).replace(' ','').replace('+','')
+            st.markdown(f"[📲 Enviar por WhatsApp](https://wa.me/{tel_clean}?text={urllib.parse.quote(txt)})")
+    else: st.info("No hay órdenes de trabajo activas.")
+
+    st.markdown("---")
+    st.subheader("🛠️ Editar y Gestionar OT")
+
+    df_ot_edit = pd.read_sql_query("""
+        SELECT o.id, 
+               COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa, 
+               o.descripcion, 
+               o.monto_total, 
+               o.costo_insumos, 
+               o.estado 
+        FROM ordenes o 
+        JOIN clientes c ON o.cliente_id = c.id
+        ORDER BY o.id DESC
+    """, conn)
+
+    if not df_ot_edit.empty:
+        ot_opciones = {f"OT {row['id']} - {row['Empresa']}": row for _, row in df_ot_edit.iterrows()}
+        ot_seleccionada = st.selectbox("Seleccione la OT para modificar:", options=list(ot_opciones.keys()))
+        
+        datos_ot = ot_opciones[ot_seleccionada]
+        ot_id = int(datos_ot['id'])
+
+        df_pagos_ot = pd.read_sql_query(f"SELECT id, monto_cuota, estado_pago, notas FROM pagos WHERE orden_id = {ot_id}", conn)
+        entrega_actual_val = df_pagos_ot[df_pagos_ot['notas'] == 'ENTREGA INICIAL']['monto_cuota'].sum()
+        
+        with st.form("form_edicion_completa_ot"):
+            col_ot1, col_ot2 = st.columns(2)
+            
+            estados_permitidos = ["Pendiente", "En Proceso", "Finalizada", "Cancelada", "Entregado", "Venta"]
+            estado_actual = datos_ot['estado']
+            indice_default = estados_permitidos.index(estado_actual) if estado_actual in estados_permitidos else 0
+
+            with col_ot1:
+                nuevo_monto = st.number_input("Monto Total:", value=int(datos_ot.get('monto_total', 0)), step=50000)
+                st.info(f"Confirmar total: **{int(nuevo_monto):,} Gs.**".replace(",", "."))
+                
+                nueva_entrega_ot = st.number_input("Entrega Inicial:", value=int(entrega_actual_val), step=50000)
+                st.info(f"Confirmar entrega: **{int(nueva_entrega_ot):,} Gs.**".replace(",", "."))
+                
+                nuevo_estado = st.selectbox("Estado del Trabajo:", options=estados_permitidos, index=indice_default)
+
+            with col_ot2:
+                nuevo_costo = st.number_input("Costo de Insumos / Repuestos:", value=int(datos_ot['costo_insumos']), step=10000)
+                st.info(f"Costo: **{int(nuevo_costo):,} Gs.**".replace(",", "."))
+                nueva_desc = st.text_area("Descripción detallada:", value=datos_ot['descripcion'], key=f"edit_desc_{ot_seleccionada}")
+                
+                cant_cuotas_reajuste = st.number_input("Cantidad de Cuotas Restantes", min_value=1, value=max(len(df_pagos_ot[df_pagos_ot['estado_pago'] == 'Pendiente']), 1))
+
+            boton_guardar = st.form_submit_button("💾 Guardar Cambios y Reajustar Saldos")
+
+        if boton_guardar:
+            try:
+                id_actualizar = int(datos_ot['id']) 
+                with sqlite3.connect('sistema.db') as conn_edit:
+                    cursor_edit = conn_edit.cursor()
+                    
+                    sql_update = """
+                        UPDATE ordenes 
+                        SET monto_total = ?, costo_insumos = ?, descripcion = ?, estado = ? 
+                        WHERE id = ?
+                    """
+                    cursor_edit.execute(sql_update, (int(nuevo_monto), int(nuevo_costo), nueva_desc.upper(), nuevo_estado, id_actualizar))
+                    
+                    cursor_edit.execute("DELETE FROM pagos WHERE orden_id = ?", (id_actualizar,))
+                    
+                    if nueva_entrega_ot > 0:
+                        cursor_edit.execute("""
+                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                            VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
+                        """, (id_actualizar, nueva_entrega_ot, datetime.now().strftime("%Y-%m-%d")))
+                    
+                    saldo_restante_ot = nuevo_monto - nueva_entrega_ot
+                    if saldo_restante_ot > 0:
+                        monto_por_cuota_ot = saldo_restante_ot / cant_cuotas_reajuste
+                        for i in range(1, cant_cuotas_reajuste + 1):
+                            vence_reajuste = datetime.now() + relativedelta(months=i)
+                            cursor_edit.execute("""
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                VALUES (?, ?, ?, 'Pendiente', ?)
+                            """, (id_actualizar, monto_por_cuota_ot, vence_reajuste.strftime("%Y-%m-%d"), f"CUOTA {i}/{cant_cuotas_reajuste}"))
+                    
+                    conn_edit.commit()
+
+                st.success(f"✅ ¡OT {id_actualizar} reajustada y actualizada correctamente!")
+                time.sleep(1)
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error al guardar: {e}")
+
+        ot_sel = datos_ot['id']
+        st.markdown("---")
+        confirmacion = st.popover("🗑️ Eliminar esta OT")
+
+        with confirmacion:
+            st.warning(f"⚠️ ¿Estás seguro? Esta acción moverá la OT {ot_sel} a la papelera.")
+            if st.button("Sí, borrar ahora"):
+                try:
+                    with sqlite3.connect('sistema.db') as conn_del:
+                        cursor_del = conn_del.cursor()
+                        cursor_del.execute("""
+                            INSERT INTO historial_eliminacion (orden_id, cliente, monto, detalle)
+                            SELECT o.id, c.nombre, o.monto_total, o.descripcion
+                            FROM ordenes o 
+                            JOIN clientes c ON o.cliente_id = c.id
+                            WHERE o.id = ?
+                        """, (ot_sel,))
+
+                        cursor_del.execute("DELETE FROM ordenes WHERE id = ?", (ot_sel,))
+                        cursor_del.execute("DELETE FROM pagos WHERE orden_id = ?", (ot_sel,))
+                        conn_del.commit()
+
+                    st.success(f"✅ OT {ot_sel} enviada a la papelera.")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error técnico: {e}")
+
+    st.markdown("### ♻️ Recuperación")
+    with st.expander("Ver Papelera de Reciclaje"):
+        df_borrados = pd.read_sql_query("SELECT * FROM historial_eliminacion ORDER BY fecha_eliminacion DESC", sqlite3.connect('sistema.db'))
+        
+        if not df_borrados.empty:
+            st.dataframe(df_borrados)
+            ultima = df_borrados.iloc[0]
+            
+            if st.button(f"↩️ Deshacer: Recuperar OT {int(ultima['orden_id'])}"):
+                try:
+                    with sqlite3.connect('sistema.db') as conn_undo:
+                        conn_undo.execute("""
+                            INSERT INTO ordenes (id, monto_total, descripcion, estado, cliente_id, negocio_id)
+                            VALUES (?, ?, ?, 'Pendiente', 
+                                (SELECT id FROM clientes WHERE apodo = ? OR nombre = ? LIMIT 1), 
+                                (SELECT id FROM negocios LIMIT 1))
+                        """, (int(ultima['orden_id']), ultima['monto'], ultima['detalle'], ultima['cliente'], ultima['cliente']))
+                        
+                        conn_undo.execute("DELETE FROM historial_eliminacion WHERE id = ?", (int(ultima['id']),))
+                        conn_undo.commit()
+                    
+                    st.success("Orden recuperada correctamente.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al recuperar: {e}")
+        else:
+            st.info("La papelera está vacía.")
+
+    st.markdown("---")
+    with st.popover("🚨 Limpieza Definitiva"):
+        st.warning("¿Estás seguro de que querés vaciar la papelera? Esta acción no se puede deshacer.")
+        if st.button("Confirmar: Vaciar todo"):
+            try:
+                with sqlite3.connect('sistema.db') as conn_clear:
+                    conn_clear.execute("DELETE FROM historial_eliminacion")
+                    conn_clear.commit()
+                st.success("Papelera vaciada con éxito.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al vaciar: {e}")            
+
+elif choice == "✅ Historial de Cobrados":
+    st.title("Registro Histórico de Ingresos")
+    df_h = pd.read_sql_query("""
+        SELECT p.fecha_vencimiento as Fecha, n.nombre as Negocio, c.nombre as Cliente, c.apodo as Empresa, p.monto_cuota as Cobrado
+        FROM pagos p JOIN ordenes o ON p.orden_id = o.id JOIN clientes c ON o.cliente_id = c.id
+        JOIN negocios n ON o.negocio_id = n.id WHERE p.estado_pago = 'Pagado' ORDER BY Fecha DESC
+    """, conn)
+    if not df_h.empty:
+        st.dataframe(df_h, use_container_width=True, hide_index=True)
+    else:
+        st.info("El historial está vacío. Los pagos aparecerán aquí una vez que los confirmes en 'Cobros Pendientes'.")
+
+elif choice == "🛒 Nueva Venta / Servicio":
+    st.title("Cargar Nueva Operación")
+    
+    negocio_nom = st.radio("Facturar con:", ["GHV - Service", "OnXpert Software"], horizontal=True)
+    n_id = 1 if negocio_nom == "GHV - Service" else 2
+    
+    df_c = pd.read_sql_query("SELECT id, apodo || ' - ' || nombre as cliente_display FROM clientes WHERE activo = 1", conn)
+    
+    if not df_c.empty:
+        cliente_dict = dict(zip(df_c['cliente_display'], df_c['id']))
+        c_sel = st.selectbox("Seleccionar Cliente:", options=list(cliente_dict.keys()))
+
+        tipo_op = st.selectbox("¿Qué vas a registrar?", [
+            "🛒 Venta de Artículo (Hardware)", 
+            "🛠️ Servicio Técnico (GHV)", 
+            "💻 Software / Membresía (OnXpert)"
+        ])
+
+        if tipo_op == "🛒 Venta de Artículo (Hardware)":
+            tipo_v = st.radio("Condición", ["Contado", "Cuotas"], horizontal=True)
+            cant_c = st.number_input("Cantidad de Cuotas", min_value=2, max_value=36, value=2) if tipo_v == "Cuotas" else 1
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                monto_v = st.number_input("Precio Venta (Gs)", min_value=0, step=50000, format="%d")
+                if monto_v > 0:
+                    st.info(f"Monto: **{int(monto_v):,} Gs.**".replace(",", "."))
+                
+                entrega = st.number_input("Entrega Inicial (Gs)", min_value=0, step=50000, format="%d")
+                if entrega > 0:
+                    st.info(f"Entrega: **{int(entrega):,} Gs.**".replace(",", "."))
+                
+            with c2:
+                costo_h = st.number_input("Costo Compra (Gs)", min_value=0, step=50000, format="%d")
+                if costo_h > 0:
+                    st.info(f"Costo: **{int(costo_h):,} Gs.**".replace(",", "."))
+                
+                f_v = st.date_input("Fecha", value=datetime.now().date())
+
+            with st.form("form_hardware_detalles", clear_on_submit=True):
+                prod = st.text_input("Producto / Descripción")
+                enviar = st.form_submit_button("Confirmar Venta")
+            
+            if enviar:
+                try:
+                    with sqlite3.connect('sistema.db') as conn_op:
+                        cursor_op = conn_op.cursor()
+                        cursor_op.execute("""
+                            INSERT INTO ordenes (negocio_id, cliente_id, descripcion, monto_total, fecha_ingreso, estado)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (n_id, cliente_dict[c_sel], prod.upper(), monto_v, f_v, 'Venta'))
+                        
+                        orden_id = cursor_op.lastrowid
+                        
+                        if entrega > 0:
+                            cursor_op.execute("""
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
+                            """, (orden_id, entrega, f_v))
+                        
+                        saldo = monto_v - entrega
+                        if saldo > 0:
+                            n_cuotas = cant_c
+                            por_cuota = saldo / n_cuotas
+                            for i in range(1, n_cuotas + 1):
+                                vence_c = f_v + relativedelta(months=i)
+                                txt = f"CUOTA {i}/{n_cuotas}" if tipo_v == "Cuotas" else "SALDO CONTADO"
+                                cursor_op.execute("""
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                    VALUES (?, ?, ?, 'Pendiente', ?)
+                                """, (orden_id, por_cuota, vence_c.strftime("%Y-%m-%d"), txt))
+                        
+                        conn_op.commit()
+                        st.success("✅ ¡Venta registrada exitosamente!")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
+
+        elif tipo_op == "🛠️ Servicio Técnico (GHV)":
+            eq = st.text_input("Equipo (Ej: Notebook ASUS X515)")
+            fa = st.text_input("Falla reportada (Ej: Lentitud extrema / Mantenimiento)")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                mano_de_obra = st.number_input("Mano de Obra Pura GHV (Gs)", min_value=0, step=10000, value=150000)
+                entrega_svc = st.number_input("Entrega Inicial del Cliente (Gs)", min_value=0, step=50000)
+                f_v = st.date_input("Fecha Temprana", value=datetime.now().date())              
+            with c2:
+                cant_c = st.number_input("Cuotas del Saldo Restante", min_value=1, value=1)
+            
+            st.markdown("#### ➕ Agregar Insumos / Repuestos desde Stock")
+            
+            df_prod_disponibles = pd.read_sql_query("""
+                SELECT id, categoria || ' ' || marca || ' (' || capacidad_especificacion || ') - Stock: ' || stock as display, 
+                       precio_venta, precio_costo, stock, categoria || ' ' || marca || ' (' || capacidad_especificacion || ')' as nombre_corto
+                FROM productos WHERE stock > 0
+            """, conn)
+            
+            if 'insumos_orden' not in st.session_state:
+                st.session_state.insumos_orden = []
+                
+            if df_prod_disponibles.empty:
+                st.info("No hay productos cargados en el Inventario o no queda stock disponible.")
+            else:
+                col_sel_p, col_cant_p, col_btn_p = st.columns([3, 1, 1])
+                p_elegido_display = col_sel_p.selectbox("Seleccionar Repuesto:", df_prod_disponibles['display'], key="p_insumo_sel")
+                cant_elegida = col_cant_p.number_input("Cantidad", min_value=1, value=1, key="p_insumo_cant")
+                
+                if col_btn_p.button("➕ Añadir Insumo", use_container_width=True):
+                    match_p = df_prod_disponibles[df_prod_disponibles['display'] == p_elegido_display].iloc[0]
+                    if cant_elegida > match_p['stock']:
+                        st.error(f"No podés agregar {cant_elegida} unidades. Solo quedan {match_p['stock']} en stock.")
+                    else:
+                        st.session_state.insumos_orden.append({
+                            'id': int(match_p['id']),
+                            'nombre': match_p['nombre_corto'],
+                            'cantidad': int(cant_elegida),
+                            'precio_venta': float(match_p['precio_venta']),
+                            'precio_costo': float(match_p['precio_costo'])
+                        })
+                        st.toast("Insumo agregado a la lista temporal.")
+            
+            total_insumos_venta = 0.0
+            total_insumos_costo = 0.0
+            detalle_insumos_texto = ""
+            
+            if st.session_state.insumos_orden:
+                st.markdown("##### 📋 Lista de Insumos para esta OT")
+                for idx, ins in enumerate(st.session_state.insumos_orden):
+                    subtotal_i = ins['cantidad'] * ins['precio_venta']
+                    total_insumos_venta += subtotal_i
+                    total_insumos_costo += ins['cantidad'] * ins['precio_costo']
+                    detalle_insumos_texto += f"\n- {ins['cantidad']}x {ins['nombre']}"
+                    
+                    c_i1, c_i2, c_i3 = st.columns([3, 1, 1])
+                    c_i1.markdown(f"🔹 **{ins['nombre']}** (Cant: {ins['cantidad']})")
+                    c_i2.markdown(f"{subtotal_i:,.0f} Gs.")
+                    if c_i3.button("🗑️", key=f"del_ins_{idx}"):
+                        st.session_state.insumos_orden.pop(idx)
+                        st.rerun()
+
+            precio_final_calculado = mano_de_obra + total_insumos_venta
+            st.markdown("---")
+            st.markdown(f"### 🧮 Total Proyectado: **{int(precio_final_calculado):,} Gs.**".replace(",", "."))
+            st.caption(f"Mano de Obra ({int(mano_de_obra):,} Gs) + Insumos ({int(total_insumos_venta):,} Gs). Costo total de adquisición: {int(total_insumos_costo):,} Gs.")
+
+            col_sub1, col_sub2 = st.columns(2)
+            with col_sub1:
+                enviar_svc = st.button("🚀 Registrar Servicio Técnico Completo", use_container_width=True)
+            with col_sub2:
+                if st.button("❌ Limpiar Todo", use_container_width=True):
+                    st.session_state.insumos_orden = []
+                    st.rerun()
+
+            if enviar_svc:
+                if not eq or not fa:
+                    st.error("⚠️ Por favor, completa el equipo y la falla.")
+                else:
+                    try:
+                        with sqlite3.connect('sistema.db') as conn_op:
+                            cursor_op = conn_op.cursor()
+                            id_cliente_actual = cliente_dict[c_sel]
+                            
+                            descripcion_completa_ot = f"{eq.upper()} - FALLA: {fa.upper()}"
+                            if detalle_insumos_texto:
+                                descripcion_completa_ot += f"\n\n🛠️ COMPONENTES INSTALADOS:{detalle_insumos_texto.upper()}"
+                            
+                            cursor_op.execute("""
+                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado)
+                                VALUES (1, ?, ?, ?, ?, ?, 'En Proceso')
+                            """, (id_cliente_actual, descripcion_completa_ot, f_v.strftime("%Y-%m-%d"), precio_final_calculado, total_insumos_costo))
+                            
+                            orden_id = cursor_op.lastrowid
+                            
+                            for ins in st.session_state.insumos_orden:
+                                cursor_op.execute("""
+                                    UPDATE productos 
+                                    SET stock = stock - ? 
+                                    WHERE id = ?
+                                """, (ins['cantidad'], ins['id']))
+                            
+                            if entrega_svc > 0:
+                                cursor_op.execute("""
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                    VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
+                                """, (orden_id, entrega_svc, f_v.strftime("%Y-%m-%d")))
+                            
+                            saldo_restante = precio_final_calculado - entrega_svc
+                            if saldo_restante > 0:
+                                monto_c = saldo_restante / int(cant_c)
+                                for i in range(1, int(cant_c) + 1):
+                                    vencimiento = f_v + relativedelta(months=i)
+                                    cursor_op.execute("""
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                        VALUES (?, ?, ?, 'Pendiente', ?)
+                                    """, (orden_id, monto_c, vencimiento.strftime("%Y-%m-%d"), f"CUOTA {i}/{int(cant_c)}"))
+                            
+                            conn_op.commit()
+                            
+                            st.session_state.insumos_orden = []
+                            st.success(f"✅ ¡Servicio Técnico Registrado con éxito! OT #{orden_id} generada y Stock actualizado.")
+                            time.sleep(1)
+                            st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Error al registrar: {e}")
+
+        elif tipo_op == "💻 Software / Membresía (OnXpert)":
+            soft = st.text_input("Nombre del Sistema")
+            c1, c2 = st.columns(2)
+            ms = c1.number_input("Costo Software", min_value=0)
+            mm = c2.number_input("Membresía Mensual", min_value=0)
+            
+            modo_pago = st.radio("Tipo de Cobro", ["Membresía Mensual", "Pagos Programados (Ej: La Hornalla)"])
+            meses = st.slider("Cantidad de meses o pagos", 1, 12, 1)
+            
+            fechas_personalizadas = []
+            if modo_pago == "Pagos Programados (Ej: La Hornalla)":
+                st.write("Seleccioná las fechas para cada pago:")
+                cols = st.columns(min(meses, 3))
+                for i in range(meses):
+                    f_p = cols[i % 3].date_input(f"Pago {i+1}", value=datetime.now().date(), key=f"f_p_{i}")
+                    fechas_personalizadas.append(f_p)
+            
+            f_v = st.date_input("Fecha Inicio", value=datetime.now().date())
+
+            if st.button("Registrar Software"):
+                registrar_venta_onxpert(c_sel.split(' - ')[1], c_sel.split(' - ')[0], "", soft, ms, mm, meses, f_v)
+                st.success("Software registrado correctamente.")
+                time.sleep(1)
+                st.rerun()
+    else:
+        st.warning("Primero debés dar de alta un cliente en 'Gestión de Clientes'.")
+
+elif choice == "📈 Reportes Avanzados":
+    st.header("📊 Reportes y Análisis de Negocio")
+    tab_r1, tab_r2 = st.tabs(["Rentabilidad por Negocio", "Comportamiento de Cliente"])
+
+    with tab_r1:
+        st.subheader("Análisis de Margen Real")
+        
+        df_rent = pd.read_sql_query("""
+            SELECT 
+                n.nombre as Negocio,
+                COALESCE((
+                    SELECT SUM(p.monto_cuota) 
+                    FROM pagos p 
+                    JOIN ordenes o2 ON p.orden_id = o2.id 
+                    WHERE o2.negocio_id = n.id
+                ), 0) as Ingresos_Totales,
+                COALESCE((
+                    SELECT SUM(o3.costo_insumos) 
+                    FROM ordenes o3 
+                    WHERE o3.negocio_id = n.id
+                ), 0) as Costos_Totales
+            FROM negocios n
+        """, conn)
+
+        df_rent['Utilidad_Neta'] = df_rent['Ingresos_Totales'] - df_rent['Costos_Totales']
+        col_graf, col_tabla = st.columns([1, 1])
+
+        with col_graf:
+            if df_rent['Utilidad_Neta'].sum() > 0:
+                fig_rent = px.pie(
+                    df_rent, 
+                    values='Utilidad_Neta', 
+                    names='Negocio', 
+                    title="Distribución de Utilidad Neta",
+                    hole=0.4,
+                    color_discrete_sequence=['#3498db', '#e67e22']
+                )
+                st.plotly_chart(fig_rent, use_container_width=True)
+            else:
+                st.warning("La utilidad total es 0 o negativa para graficar.")
+
+        with col_tabla:
+            df_visual = df_rent.copy()
+            def pts(x): return f"{int(x):,}".replace(",", ".")
+            df_visual['Ingresos_Totales'] = df_visual['Ingresos_Totales'].apply(pts)
+            df_visual['Costos_Totales'] = df_visual['Costos_Totales'].apply(pts)
+            df_visual['Utilidad_Neta'] = df_visual['Utilidad_Neta'].apply(pts)
+            st.table(df_visual)
+
+    with tab_r2:
+        st.subheader("Análisis de Comportamiento por Cliente")
+        
+        df_comp = pd.read_sql_query("""
+            SELECT 
+                c.apodo as Empresa,
+                COUNT(DISTINCT o.id) as Cantidad_OTs,
+                SUM(o.monto_total) as Volumen_Contratado,
+                COALESCE((
+                    SELECT SUM(p.monto_cuota) 
+                    FROM pagos p 
+                    JOIN ordenes o2 ON p.orden_id = o2.id 
+                    WHERE o2.cliente_id = c.id AND p.estado_pago = 'Pagado'
+                ), 0) as Total_Pagado,
+                COALESCE((
+                    SELECT SUM(p.monto_cuota) 
+                    FROM pagos p 
+                    JOIN ordenes o2 ON p.orden_id = o2.id 
+                    WHERE o2.cliente_id = c.id AND p.estado_pago = 'Pendiente'
+                ), 0) as Saldo_Pendiente
+            FROM clientes c
+            JOIN ordenes o ON c.id = o.cliente_id
+            GROUP BY c.apodo
+            ORDER BY Volumen_Contratado DESC
+        """, conn)
+
+        if not df_comp.empty:
+            fig_bar = px.bar(
+                df_comp, 
+                x='Empresa', 
+                y=['Total_Pagado', 'Saldo_Pendiente'],
+                title="Saldos Reales por Cliente",
+                barmode='stack',
+                color_discrete_map={'Total_Pagado': '#2ecc71', 'Saldo_Pendiente': '#e74c3c'}
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            df_comp_fmt = df_comp.copy()
+            for col in ['Volumen_Contratado', 'Total_Pagado', 'Saldo_Pendiente']:
+                df_comp_fmt[col] = df_comp_fmt[col].apply(lambda x: f"{int(x):,}".replace(",", "."))
+            st.dataframe(df_comp_fmt, use_container_width=True)
+
+# --- 4. MÓDULO: INVENTARIO / STOCK (CON EDICIÓN TOTAL) ---
+elif choice == "📦 Inventario / Stock":
+    st.title("Gestión de Inventario (GHV - Service)")
+    
+    tab_inv1, tab_inv2 = st.tabs(["📥 Cargar Producto", "📋 Stock Actual / Disponibilidad"])
+    
+    with tab_inv1:
+        st.subheader("Ingreso de Mercadería al Taller")
+        with st.form("form_nuevo_producto", clear_on_submit=True):
+            col_in1, col_in2 = st.columns(2)
+            with col_in1:
+                cat = st.selectbox("Categoría del Artículo:", ["DISCO SSD", "MEMORIA RAM", "ADAPTADOR CADDY", "FUENTES / CARGADORES", "COOLERS", "PANTALLAS", "OTROS"])
+                mrc = st.text_input("Marca (Ej: Kingston, Crucial, WD)").upper().strip()
+                cap = st.text_input("Capacidad / Especificación (Ej: 480GB SATA, 8GB DDR4 3200Mhz, 9.5mm)").upper().strip()
+            with col_in2:
+                cant_stock = st.number_input("Cantidad de Unidades Ingresantes:", min_value=1, step=1, value=1)
+                p_costo = st.number_input("Precio de Costo Mayorista (Gs):", min_value=0, step=10000, format="%d")
+                p_venta = st.number_input("Precio de Venta al Público Sugerido (Gs):", min_value=0, step=10000, format="%d")
+            
+            submit_p = st.form_submit_button("📥 Guardar en Inventario")
+            
+        if submit_p:
+            if not mrc or not cap:
+                st.error("⚠️ Debes completar la Marca y la Especificación/Capacidad del producto.")
+            else:
+                try:
+                    with sqlite3.connect('sistema.db') as conn_inv:
+                        conn_inv.execute("""
+                            INSERT INTO productos (categoria, marca, capacidad_especificacion, stock, precio_costo, precio_venta)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (cat, mrc, cap, cant_stock, p_costo, p_venta))
+                        conn_inv.commit()
+                    st.success(f"✅ ¡{cat} {mrc} ({cap}) cargado correctamente al stock!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al guardar producto: {e}")
+
+    with tab_inv2:
+        st.subheader("Inventario de Artículos Disponibles")
+        df_stock = pd.read_sql_query("""
+            SELECT id as ID, categoria as Categoría, marca as Marca, 
+                   capacidad_especificacion as Detalle, stock as [Stock Disponible], 
+                   precio_costo as [Costo (Gs)], precio_venta as [P. Venta (Gs)] 
+            FROM productos ORDER BY categoria ASC, marca ASC
+        """, conn)
+        
+        if not df_stock.empty:
+            df_stock_fmt = df_stock.copy()
+            df_stock_fmt['Costo (Gs)'] = df_stock_fmt['Costo (Gs)'].apply(lambda x: f"{int(x):,}".replace(",", "."))
+            df_stock_fmt['P. Venta (Gs)'] = df_stock_fmt['P. Venta (Gs)'].apply(lambda x: f"{int(x):,}".replace(",", "."))
+            st.dataframe(df_stock_fmt, use_container_width=True, hide_index=True)
+            
+            # --- FORMULARIO DE EDICIÓN DE CUALQUIER DATO ---
+            st.markdown("---")
+            st.subheader("📝 Editar Cualquier Dato de un Producto")
+            
+            # Mapeo de opciones para el selectbox
+            opciones_prod = {f"ID {row['ID']} - {row['Categoría']} {row['Marca']} ({row['Detalle']})": row for _, row in df_stock.iterrows()}
+            prod_seleccionado = st.selectbox("Seleccione el producto que desea modificar por completo:", options=list(opciones_prod.keys()))
+            
+            datos_prod_act = opciones_prod[prod_seleccionado]
+            id_prod_editar = int(datos_prod_act['ID'])
+            
+            # Listado de categorías permitidas
+            cats_permitidas = ["DISCO SSD", "MEMORIA RAM", "ADAPTADOR CADDY", "FUENTES / CARGADORES", "COOLERS", "PANTALLAS", "OTROS"]
+            cat_act = datos_prod_act['Categoría']
+            idx_cat = cats_permitidas.index(cat_act) if cat_act in cats_permitidas else 0
+            
+            with st.form("form_edicion_total_producto"):
+                col_ed_p1, col_ed_p2 = st.columns(2)
+                with col_ed_p1:
+                    n_cat = st.selectbox("Categoría:", options=cats_permitidas, index=idx_cat)
+                    n_marca = st.text_input("Marca:", value=str(datos_prod_act['Marca'])).upper().strip()
+                    n_detalle = st.text_input("Detalle / Especificación:", value=str(datos_prod_act['Detalle'])).upper().strip()
+                with col_ed_p2:
+                    n_stock = st.number_input("Cantidad en Stock:", min_value=0, value=int(datos_prod_act['Stock Disponible']))
+                    n_costo = st.number_input("Precio de Costo (Gs):", min_value=0, value=int(datos_prod_act['Costo (Gs)']), step=10000)
+                    n_venta = st.number_input("Precio de Venta (Gs):", min_value=0, value=int(datos_prod_act['P. Venta (Gs)']), step=10000)
+                
+                btn_guardar_prod = st.form_submit_button("💾 Guardar Cambios del Producto")
+                
+            if btn_guardar_prod:
+                if not n_marca or not n_detalle:
+                    st.error("⚠️ La marca y el detalle no pueden quedar vacíos.")
+                else:
+                    try:
+                        with sqlite3.connect('sistema.db') as conn_prod_up:
+                            conn_prod_up.execute("""
+                                UPDATE productos 
+                                SET categoria = ?, marca = ?, capacidad_especificacion = ?, stock = ?, precio_costo = ?, precio_venta = ?
+                                WHERE id = ?
+                            """, (n_cat, n_marca, n_detalle, n_stock, n_costo, n_venta, id_prod_editar))
+                            conn_prod_up.commit()
+                        st.success(f"✅ ¡Producto ID {id_prod_editar} modificado exitosamente!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al actualizar el inventario: {e}")
+                        
+            # --- BOTÓN PARA ELIMINAR DEL INVENTARIO ---
+            st.markdown("---")
+            pop_eliminar_prod = st.popover("🗑️ Eliminar Producto del Inventario")
+            with pop_eliminar_prod:
+                st.warning(f"¿Estás seguro de que querés borrar permanentemente el ID {id_prod_editar}?")
+                if st.button("Sí, borrar del stock permanentemente", key=f"del_prod_inv_{id_prod_editar}"):
+                    with sqlite3.connect('sistema.db') as conn_prod_del:
+                        conn_prod_del.execute("DELETE FROM productos WHERE id = ?", (id_prod_editar,))
+                        conn_prod_del.commit()
+                    st.error("Producto eliminado del inventario.")
+                    time.sleep(1)
+                    st.rerun()
+        else:
+            st.info("El inventario está vacío actualmente.")
