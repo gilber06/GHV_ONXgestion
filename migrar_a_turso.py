@@ -10,7 +10,7 @@ load_dotenv()
 raw_url = os.getenv("TURSO_DATABASE_URL", "")
 auth_token = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# Forzar protocolo HTTPS
+# Forzar protocolo HTTPS para comunicación estable
 url = raw_url.replace("libsql://", "https://") if raw_url.startswith("libsql://") else raw_url
 
 # Ruta a la base de datos local
@@ -61,15 +61,16 @@ async def migrar():
             
             placeholders = ", ".join(["?"] * len(cols))
             col_names = ", ".join(cols)
-            query = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders});"
+            
+            # Usamos INSERT OR REPLACE para actualizar registros existentes y añadir los nuevos
+            query = f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders});"
 
             print(f"  ➡️ Migrando {len(rows)} filas de '{table}'...")
             for row in rows:
                 try:
                     await client.execute(query, list(row))
-                except Exception:
-                    # Evitar colisiones si ya hay registros idénticos
-                    pass
+                except Exception as e:
+                    print(f"  ⚠️ Error en fila: {e}")
 
     local_conn.close()
     print("\n✅ ¡Migración a la nube completada con éxito!")
