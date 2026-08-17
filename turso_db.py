@@ -5,9 +5,17 @@ import libsql_client
 
 load_dotenv()
 
-# Obtener URL y Token desde .env
+# Obtener URL y Token desde os.getenv o st.secrets
 raw_url = os.getenv("TURSO_DATABASE_URL", "")
 auth_token = os.getenv("TURSO_AUTH_TOKEN", "")
+
+if not raw_url or not auth_token:
+    try:
+        import streamlit as st
+        raw_url = raw_url or st.secrets.get("TURSO_DATABASE_URL", "")
+        auth_token = auth_token or st.secrets.get("TURSO_AUTH_TOKEN", "")
+    except Exception:
+        pass
 
 # Asegurar protocolo HTTPS para comunicación estable por API
 URL = raw_url.replace("libsql://", "https://") if raw_url.startswith("libsql://") else raw_url
@@ -23,7 +31,6 @@ def execute_query_sync(query: str, params=None):
     async def _run():
         async with libsql_client.create_client(url=URL, auth_token=auth_token) as client:
             res = await client.execute(query, params)
-            # Convertir el resultado a lista de tuplas estilo sqlite3
             return [tuple(row) for row in res.rows]
 
     try:
@@ -33,7 +40,6 @@ def execute_query_sync(query: str, params=None):
         asyncio.set_event_loop(loop)
 
     if loop.is_running():
-        # Si ya hay un event loop corriendo (ej. en Tkinter o Async App)
         import nest_asyncio
         nest_asyncio.apply()
         return loop.run_until_complete(_run())

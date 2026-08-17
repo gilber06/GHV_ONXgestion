@@ -1,11 +1,25 @@
 import os
 import sqlite3
-from dotenv import load_dotenv
+import streamlit as st
 
-load_dotenv()
+# Intentar obtener las credenciales de Turso desde los Secrets de Streamlit o variables de entorno
+turso_url = None
+auth_token = None
 
-# Si existe la URL de Turso en el .env, usamos Turso Cloud. Si no, SQLite local.
-USE_TURSO = bool(os.getenv("TURSO_DATABASE_URL"))
+try:
+    if "TURSO_DATABASE_URL" in st.secrets:
+        turso_url = st.secrets["TURSO_DATABASE_URL"]
+    if "TURSO_AUTH_TOKEN" in st.secrets:
+        auth_token = st.secrets["TURSO_AUTH_TOKEN"]
+except Exception:
+    pass
+
+if not turso_url:
+    turso_url = os.getenv("TURSO_DATABASE_URL")
+if not auth_token:
+    auth_token = os.getenv("TURSO_AUTH_TOKEN")
+
+USE_TURSO = bool(turso_url and auth_token)
 
 if USE_TURSO:
     import turso_db
@@ -13,15 +27,14 @@ if USE_TURSO:
 LOCAL_DB_PATH = os.path.join("database", "sistema.db")
 
 def query(sql, params=None):
-    """
-    Ejecuta consultas de SELECT y retorna todas las filas.
-    """
     if params is None:
         params = []
-
     if USE_TURSO:
         return turso_db.execute_query_sync(sql, params)
     else:
+        if not os.path.exists(LOCAL_DB_PATH):
+            st.error("⚠️ Turso no está configurado en los Secrets de Streamlit y no hay base de datos local.")
+            return []
         conn = sqlite3.connect(LOCAL_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(sql, params)
@@ -30,15 +43,14 @@ def query(sql, params=None):
         return res
 
 def execute(sql, params=None):
-    """
-    Ejecuta INSERT, UPDATE, DELETE o CREATE TABLE.
-    """
     if params is None:
         params = []
-
     if USE_TURSO:
         return turso_db.execute_query_sync(sql, params)
     else:
+        if not os.path.exists(LOCAL_DB_PATH):
+            st.error("⚠️ Turso no está configurado en los Secrets de Streamlit y no hay base de datos local.")
+            return []
         conn = sqlite3.connect(LOCAL_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(sql, params)
