@@ -1,4 +1,3 @@
-from sincronizador import ejecutar_sincronizacion_completa
 import os
 import sqlite3
 import time
@@ -12,24 +11,24 @@ import streamlit as st
 # IMPORTACIÓN DE MÓDULOS DE LA CARPETA /modules
 # ----------------------------------------------------
 try:
-    from modules import presupuestos
+  from modules import presupuestos
 except ImportError:
-    presupuestos = None
+  presupuestos = None
 
 try:
-    from modules import recordatorios
+  from modules import recordatorios
 except ImportError:
-    recordatorios = None
+  recordatorios = None
 
 try:
-    from modules import mi_negocio
+  from modules import mi_negocio
 except ImportError:
-    mi_negocio = None
+  mi_negocio = None
 
 try:
-    import plotly.express as px
+  import plotly.express as px
 except ImportError:
-    st.error("Por favor, instala plotly ejecutando: pip install plotly")
+  st.error("Por favor, instala plotly ejecutando: pip install plotly")
 
 # ==========================================
 # 1. CONFIGURACIÓN Y PARCHE DE BASE DE DATOS
@@ -44,57 +43,53 @@ DB_PATH = os.path.join(BASE_DIR, "database", "sistema.db")
 
 
 def inicializar_db():
-    # Asegurar que la carpeta database exista físicamente
-    if not os.path.exists(os.path.join(BASE_DIR, "database")):
-        os.makedirs(os.path.join(BASE_DIR, "database"))
+  conn = sqlite3.connect(DB_PATH)
+  cursor = conn.cursor()
+  cursor.execute("""CREATE TABLE IF NOT EXISTS clientes 
+                      (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT, es_companero BOOLEAN)""")
+  cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
+                      (id INTEGER PRIMARY KEY, nombre TEXT)""")
+  cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
+                      (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
+                       descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
+                       costo_insumos REAL DEFAULT 0, estado TEXT,
+                       FOREIGN KEY(negocio_id) REFERENCES negocios(id))""")
+  cursor.execute("""CREATE TABLE IF NOT EXISTS pagos 
+                      (id INTEGER PRIMARY KEY, orden_id INTEGER, monto_cuota REAL, 
+                       fecha_vencimiento TEXT, estado_pago TEXT)""")
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Creación de tablas base
-    cursor.execute("""CREATE TABLE IF NOT EXISTS clientes 
-                    (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT, es_companero BOOLEAN)""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
-                    (id INTEGER PRIMARY KEY, nombre TEXT)""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
-                    (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
-                     descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
-                     costo_insumos REAL DEFAULT 0, estado TEXT,
-                     FOREIGN KEY(negocio_id) REFERENCES negocios(id))""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS pagos 
-                    (id INTEGER PRIMARY KEY, orden_id INTEGER, monto_cuota REAL, 
-                     fecha_vencimiento TEXT, estado_pago TEXT)""")
+  cursor.execute("PRAGMA table_info(ordenes)")
+  columnas = [info[1] for info in cursor.fetchall()]
+  if "costo_insumos" not in columnas:
+    cursor.execute(
+        "ALTER TABLE ordenes ADD COLUMN costo_insumos REAL DEFAULT 0"
+    )
 
-    cursor.execute("PRAGMA table_info(ordenes)")
-    columnas = [info[1] for info in cursor.fetchall()]
-    if "costo_insumos" not in columnas:
-        cursor.execute("ALTER TABLE ordenes ADD COLUMN costo_insumos REAL DEFAULT 0")
+  cursor.execute("SELECT COUNT(*) FROM negocios")
+  if cursor.fetchone()[0] == 0:
+    cursor.executemany(
+        "INSERT INTO negocios (id, nombre) VALUES (?,?)",
+        [(1, "GHV Service"), (2, "OnXpert Software")],
+    )
 
-    cursor.execute("SELECT COUNT(*) FROM negocios")
-    if cursor.fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO negocios (id, nombre, sincronizado) VALUES (?,?,0)",
-            [(1, "GHV Service"), (2, "OnXpert Software")],
-        )
+  cursor.execute("""CREATE TABLE IF NOT EXISTS ventas_articulos 
+                      (id INTEGER PRIMARY KEY, cliente_id INTEGER, producto TEXT, 
+                       tipo_pago TEXT, monto_total REAL, costo_adquisicion REAL, 
+                       fecha_venta TEXT)""")
 
-    cursor.execute("""CREATE TABLE IF NOT EXISTS ventas_articulos 
-                    (id INTEGER PRIMARY KEY, cliente_id INTEGER, producto TEXT, 
-                     tipo_pago TEXT, monto_total REAL, costo_adquisicion REAL, 
-                     fecha_venta TEXT)""")
+  cursor.execute("PRAGMA table_info(clientes)")
+  cols_c = [info[1] for info in cursor.fetchall()]
+  if "ruc_ci" not in cols_c:
+    cursor.execute("ALTER TABLE clientes ADD COLUMN ruc_ci TEXT")
+  if "activo" not in cols_c:
+    cursor.execute("ALTER TABLE clientes ADD COLUMN activo INTEGER DEFAULT 1")
 
-    cursor.execute("PRAGMA table_info(clientes)")
-    cols_c = [info[1] for info in cursor.fetchall()]
-    if "ruc_ci" not in cols_c:
-        cursor.execute("ALTER TABLE clientes ADD COLUMN ruc_ci TEXT")
-    if "activo" not in cols_c:
-        cursor.execute("ALTER TABLE clientes ADD COLUMN activo INTEGER DEFAULT 1")
+  cursor.execute("PRAGMA table_info(pagos)")
+  cols_p = [info[1] for info in cursor.fetchall()]
+  if "notas" not in cols_p:
+    cursor.execute("ALTER TABLE pagos ADD COLUMN notas TEXT")
 
-    cursor.execute("PRAGMA table_info(pagos)")
-    cols_p = [info[1] for info in cursor.fetchall()]
-    if "notas" not in cols_p:
-        cursor.execute("ALTER TABLE pagos ADD COLUMN notas TEXT")
-
-    cursor.execute("""
+  cursor.execute("""
         CREATE TABLE IF NOT EXISTS historial_eliminacion (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             orden_id INTEGER,
@@ -105,17 +100,17 @@ def inicializar_db():
         )
     """)
 
-    cursor.execute("""CREATE TABLE IF NOT EXISTS productos 
-                    (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                     categoria TEXT, 
-                     marca TEXT, 
-                     capacidad_especificacion TEXT, 
-                     stock INTEGER DEFAULT 0, 
-                     precio_costo REAL DEFAULT 0, 
-                     precio_venta REAL DEFAULT 0)""")
+  cursor.execute("""CREATE TABLE IF NOT EXISTS productos 
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                       categoria TEXT, 
+                       marca TEXT, 
+                       capacidad_especificacion TEXT, 
+                       stock INTEGER DEFAULT 0, 
+                       precio_costo REAL DEFAULT 0, 
+                       precio_venta REAL DEFAULT 0)""")
 
-    # TABLA PARA RECEPCIÓN DE EQUIPOS / TALLER
-    cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes_trabajo (
+  # TABLA PARA RECEPCIÓN DE EQUIPOS / TALLER
+  cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes_trabajo (
                         id_orden INTEGER PRIMARY KEY AUTOINCREMENT,
                         id_cliente INTEGER NOT NULL,
                         tipo_equipo TEXT NOT NULL,
@@ -131,32 +126,12 @@ def inicializar_db():
                         FOREIGN KEY(id_cliente) REFERENCES clientes(id)
                     )""")
 
-    conn.commit()
-    conn.close()  # Cerramos la conexión limpia aquí
+  conn.commit()
+  conn.close()
 
-# 1. PRIMERO: Creamos la estructura de la base de datos y tablas
+
 inicializar_db()
 
-# 2. SEGUNDO: Sincronización inicial al abrir la app (solo una vez por sesión)
-if "sincronizado_inicial" not in st.session_state:
-    try:
-        ejecutar_sincronizacion_completa()
-        st.session_state["sincronizado_inicial"] = True
-    except Exception as e:
-        st.error(f"Error en sincronización inicial: {e}")
-
-# --- BOTÓN DE SINCRONIZACIÓN MANUAL (SIDEBAR) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("☁️ Control de Nube")
-
-if st.sidebar.button("🔄 Sincronizar Ahora"):
-    with st.sidebar.spinner('Conectando con Supabase...'):
-        try:
-            ejecutar_sincronizacion_completa()
-            st.sidebar.success("¡Sincronización completa!")
-        except Exception as e:
-            st.sidebar.error(f"Error: {e}")
-            st.sidebar.write("Verifica tu conexión a internet o la clave de Supabase.")
 
 # ==========================================
 # 2. FUNCIONES DE LÓGICA DE NEGOCIO
@@ -177,11 +152,11 @@ def registrar_venta_onxpert(
   conn = sqlite3.connect(DB_PATH)
   cursor = conn.cursor()
   cursor.execute(
-      "INSERT OR IGNORE INTO clientes (nombre, apodo, telefono, sincronizado) VALUES (?,?,?,0)",
+      "INSERT OR IGNORE INTO clientes (nombre, apodo, telefono) VALUES (?,?,?)",
       (cliente, empresa, telefono),
   )
   cursor.execute(
-      "UPDATE clientes SET apodo = ?, telefono = ?, sincronizado = 0 WHERE nombre = ?",
+      "UPDATE clientes SET apodo = ?, telefono = ? WHERE nombre = ?",
       (empresa, telefono, cliente),
   )
   cursor.execute("SELECT id FROM clientes WHERE nombre = ?", (cliente,))
@@ -190,8 +165,8 @@ def registrar_venta_onxpert(
   monto_total_op = monto_soft + (monto_memb * cuotas_memb)
   cursor.execute(
       """
-        INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado, sincronizado) 
-        VALUES (2, ?, ?, ?, ?, 0, 'Activo', 0)
+        INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado) 
+        VALUES (2, ?, ?, ?, ?, 0, 'Activo')
     """,
       (
           cliente_id,
@@ -208,8 +183,8 @@ def registrar_venta_onxpert(
     if cuotas_soft == 1:
       cursor.execute(
           """
-                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
-                VALUES (?, ?, ?, 'Pendiente', 'SOFTWARE / IMPLEMENTACIÓN', 0)
+                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas) 
+                VALUES (?, ?, ?, 'Pendiente', 'SOFTWARE / IMPLEMENTACIÓN')
             """,
           (orden_id, monto_soft, fecha_manual.strftime("%Y-%m-%d")),
       )
@@ -219,8 +194,8 @@ def registrar_venta_onxpert(
         venc_soft = fecha_manual + relativedelta(months=i)
         cursor.execute(
             """
-                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
-                    VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas) 
+                    VALUES (?, ?, ?, 'Pendiente', ?)
                 """,
             (
                 orden_id,
@@ -236,8 +211,8 @@ def registrar_venta_onxpert(
       venc_memb = fecha_manual + relativedelta(months=i)
       cursor.execute(
           """
-                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
-                VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas) 
+                VALUES (?, ?, ?, 'Pendiente', ?)
             """,
           (
               orden_id,
@@ -248,7 +223,6 @@ def registrar_venta_onxpert(
       )
 
   conn.commit()
-  ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -259,12 +233,11 @@ def actualizar_datos_cliente(
   cursor = conn.cursor()
   cursor.execute(
       """UPDATE clientes 
-                      SET nombre = ?, apodo = ?, telefono = ?, ruc_ci = ?, sincronizado = 0 
+                      SET nombre = ?, apodo = ?, telefono = ?, ruc_ci = ? 
                       WHERE id = ?""",
       (nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc, id_cliente),
   )
   conn.commit()
-  ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -273,10 +246,9 @@ def cambiar_estado_cliente(id_cliente, activo=True):
   cursor = conn.cursor()
   estado = 1 if activo else 0
   cursor.execute(
-      "UPDATE clientes SET activo = ?, sincronizado = 0 WHERE id = ?", (estado, id_cliente)
+      "UPDATE clientes SET activo = ? WHERE id = ?", (estado, id_cliente)
   )
   conn.commit()
-  ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -517,8 +489,8 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
               cursor_ot.execute(
                   """
                                 INSERT INTO ordenes_trabajo 
-                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, estado, sincronizado)
-                                VALUES (?, ?, ?, ?, ?, ?, 'Pendiente de Revisión', 0)
+                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, estado)
+                                VALUES (?, ?, ?, ?, ?, ?, 'Pendiente de Revisión')
                             """,
                   (
                       cli_dict_rec[cli_sel_rec],
@@ -530,7 +502,6 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
                   ),
               )
               conn_ot.commit()
-              ejecutar_sincronizacion_completa()
               nueva_ot_id = cursor_ot.lastrowid
             st.success(
                 "✅ ¡Equipo registrado exitosamente con la Orden de Trabajo N°"
@@ -678,7 +649,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
             cursor_up.execute(
                 """
                             UPDATE ordenes_trabajo 
-                            SET estado = ?, diagnostico_tecnico = ?, monto_presupuesto = ?, fecha_modificacion = CURRENT_TIMESTAMP, sincronizado = 0
+                            SET estado = ?, diagnostico_tecnico = ?, monto_presupuesto = ?, fecha_modificacion = CURRENT_TIMESTAMP
                             WHERE id_orden = ?
                         """,
                 (nuevo_est_ot, diag_tec, monto_presup, id_ot_actual),
@@ -695,8 +666,8 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
               )
               cursor_up.execute(
                   """
-                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado, sincronizado)
-                                VALUES (1, ?, ?, ?, ?, 0, 'En Proceso', 0)
+                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado)
+                                VALUES (1, ?, ?, ?, ?, 0, 'En Proceso')
                             """,
                   (
                       datos_ot_taller["id_cliente"],
@@ -710,8 +681,8 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
 
               cursor_up.execute(
                   """
-                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                VALUES (?, ?, ?, 'Pendiente', ?)
                             """,
                   (
                       nueva_ord_id,
@@ -722,7 +693,6 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
               )
 
             conn_up_ot.commit()
-            ejecutar_sincronizacion_completa()
           st.success("✅ ¡Orden de Trabajo de Taller actualizada!")
           time.sleep(1)
           st.rerun()
@@ -892,11 +862,10 @@ elif choice == "🗓️ Cobros Pendientes":
                 key=f"btn_cobrar_{empresa}_{pago_id}",
             ):
               conn.execute(
-                  "UPDATE pagos SET estado_pago = 'Pagado', sincronizado = 0 WHERE id = ?",
+                  "UPDATE pagos SET estado_pago = 'Pagado' WHERE id = ?",
                   (pago_id,),
               )
               conn.commit()
-              ejecutar_sincronizacion_completa()
               st.success("¡Pago marcado como Pagado!")
               time.sleep(1)
               st.rerun()
@@ -917,7 +886,7 @@ elif choice == "🗓️ Cobros Pendientes":
                 conn_reprog.execute(
                     """
                                     UPDATE pagos 
-                                    SET fecha_vencimiento = ?, notas = ?, sincronizado = 0 
+                                    SET fecha_vencimiento = ?, notas = ? 
                                     WHERE id = ?
                                 """,
                     (
@@ -927,7 +896,6 @@ elif choice == "🗓️ Cobros Pendientes":
                     ),
                 )
                 conn_reprog.commit()
-                ejecutar_sincronizacion_completa()
               st.success(f"Vencimiento movido al {nueva_fecha}")
               time.sleep(1)
               st.rerun()
@@ -974,8 +942,8 @@ elif choice == "🗓️ Cobros Pendientes":
                   nueva_nota = f"{nota_orig_txt} (PARTE {i+1}/{int(num_partes)})"
                   cursor_div.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                        VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                        VALUES (?, ?, ?, 'Pendiente', ?)
                                     """,
                       (
                           ord_id,
@@ -986,7 +954,6 @@ elif choice == "🗓️ Cobros Pendientes":
                   )
 
                 conn_div.commit()
-                ejecutar_sincronizacion_completa()
               st.success(
                   f"✅ ¡Pago divido exitosamente en {num_partes} cuotas!"
               )
@@ -1032,7 +999,6 @@ elif choice == "🗓️ Cobros Pendientes":
     if st.button("🗑️ Eliminar Permanentemente"):
       conn.execute("DELETE FROM pagos WHERE id = ?", (id_borrar,))
       conn.commit()
-      ejecutar_sincronizacion_completa()
       st.rerun()
 
 # ==========================================
@@ -1094,13 +1060,12 @@ elif choice == "👥 Gestión de Clientes":
             try:
               cursor_local.execute(
                   """
-                                INSERT INTO clientes (nombre, apodo, telefono, ruc_ci, activo, sincronizado)
-                                VALUES (?, ?, ?, ?, 1, 0)
+                                INSERT INTO clientes (nombre, apodo, telefono, ruc_ci, activo)
+                                VALUES (?, ?, ?, ?, 1)
                             """,
                   (nombre_norm, empresa_norm, telefono.strip(), ruc_norm),
               )
               conn_local.commit()
-              ejecutar_sincronizacion_completa()
               st.success(
                   f"✅ ¡Registro exitoso! '{nombre_norm}' guardado"
                   " correctamente."
@@ -1404,7 +1369,7 @@ elif choice == "📝 Órdenes de Trabajo":
 
           sql_update = """
                         UPDATE ordenes 
-                        SET monto_total = ?, costo_insumos = ?, descripcion = ?, estado = ?, sincronizado = 0 
+                        SET monto_total = ?, costo_insumos = ?, descripcion = ?, estado = ? 
                         WHERE id = ?
                     """
           cursor_edit.execute(
@@ -1425,8 +1390,8 @@ elif choice == "📝 Órdenes de Trabajo":
           if nueva_entrega_ot > 0:
             cursor_edit.execute(
                 """
-                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                            VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
+                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                            VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
                         """,
                 (
                     id_actualizar,
@@ -1440,8 +1405,8 @@ elif choice == "📝 Órdenes de Trabajo":
             if int(cant_cuotas_reajuste) == 1:
               cursor_edit.execute(
                   """
-                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO')
                             """,
                   (
                       id_actualizar,
@@ -1455,8 +1420,8 @@ elif choice == "📝 Órdenes de Trabajo":
                 vence_reajuste = datetime.now() + relativedelta(months=i)
                 cursor_edit.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                    VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                    VALUES (?, ?, ?, 'Pendiente', ?)
                                 """,
                     (
                         id_actualizar,
@@ -1467,7 +1432,6 @@ elif choice == "📝 Órdenes de Trabajo":
                 )
 
           conn_edit.commit()
-          ejecutar_sincronizacion_completa()
 
         st.success(
             f"✅ ¡OT {id_actualizar} reajustada y actualizada correctamente!"
@@ -1509,7 +1473,6 @@ elif choice == "📝 Órdenes de Trabajo":
                 "DELETE FROM pagos WHERE orden_id = ?", (ot_sel_borrar,)
             )
             conn_del.commit()
-            ejecutar_sincronizacion_completa()
 
           st.success(f"✅ OT {ot_sel_borrar} enviada a la papelera.")
           time.sleep(1)
@@ -1533,10 +1496,10 @@ elif choice == "📝 Órdenes de Trabajo":
           with sqlite3.connect(DB_PATH) as conn_undo:
             conn_undo.execute(
                 """
-                            INSERT INTO ordenes (id, monto_total, descripcion, estado, cliente_id, negocio_id, sincronizado)
+                            INSERT INTO ordenes (id, monto_total, descripcion, estado, cliente_id, negocio_id)
                             VALUES (?, ?, ?, 'Pendiente', 
                                 (SELECT id FROM clientes WHERE apodo = ? OR nombre = ? LIMIT 1), 
-                                (SELECT id FROM negocios LIMIT 1), 0)
+                                (SELECT id FROM negocios LIMIT 1))
                         """,
                 (
                     int(ultima["orden_id"]),
@@ -1552,7 +1515,6 @@ elif choice == "📝 Órdenes de Trabajo":
                 (int(ultima["id"]),),
             )
             conn_undo.commit()
-            ejecutar_sincronizacion_completa()
 
           st.success("Orden recuperada correctamente.")
           st.rerun()
@@ -1572,7 +1534,6 @@ elif choice == "📝 Órdenes de Trabajo":
         with sqlite3.connect(DB_PATH) as conn_clear:
           conn_clear.execute("DELETE FROM historial_eliminacion")
           conn_clear.commit()
-          ejecutar_sincronizacion_completa()
         st.success("Papelera vaciada con éxito.")
         st.rerun()
       except Exception as e:
@@ -1643,11 +1604,10 @@ elif choice == "✅ Historial de Cobrados":
       if st.button("🔄 Volver a Pendiente"):
         with sqlite3.connect(DB_PATH) as conn_rev:
           conn_rev.execute(
-              "UPDATE pagos SET estado_pago = 'Pendiente', sincronizado = 0 WHERE id = ?",
+              "UPDATE pagos SET estado_pago = 'Pendiente' WHERE id = ?",
               (int(id_pago_sel),),
           )
           conn_rev.commit()
-          ejecutar_sincronizacion_completa()
         st.success(
             f"✅ El pago ID #{id_pago_sel} volvió a Cobros Pendientes."
         )
@@ -1798,8 +1758,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
               cursor_op = conn_op.cursor()
               cursor_op.execute(
                   """
-                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, monto_total, costo_insumos, fecha_ingreso, estado, sincronizado)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, monto_total, costo_insumos, fecha_ingreso, estado)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
                             """,
                   (
                       n_id,
@@ -1816,15 +1776,15 @@ elif choice == "🛒 Nueva Venta / Servicio":
 
               if modo_inv_v and prod_inv_id and descontar_stock_v:
                 cursor_op.execute(
-                    "UPDATE productos SET stock = stock - 1, sincronizado = 0 WHERE id = ?",
+                    "UPDATE productos SET stock = stock - 1 WHERE id = ?",
                     (prod_inv_id,),
                 )
 
               if entrega > 0:
                 cursor_op.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                    VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                    VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
                                 """,
                     (orden_id, entrega, f_v.strftime("%Y-%m-%d")),
                 )
@@ -1834,8 +1794,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
                 if tipo_v == "Contado":
                   cursor_op.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                        VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                        VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO')
                                     """,
                       (orden_id, saldo, f_v.strftime("%Y-%m-%d")),
                   )
@@ -1846,8 +1806,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     vence_c = f_v + relativedelta(months=i)
                     cursor_op.execute(
                         """
-                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                            VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                            VALUES (?, ?, ?, 'Pendiente', ?)
                                         """,
                         (
                             orden_id,
@@ -1858,7 +1818,6 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     )
 
               conn_op.commit()
-              ejecutar_sincronizacion_completa()
               st.success("✅ ¡Venta registrada exitosamente!")
               time.sleep(1)
               st.rerun()
@@ -2029,8 +1988,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
 
               cursor_op.execute(
                   """
-                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado, sincronizado)
-                                VALUES (1, ?, ?, ?, ?, ?, 'En Proceso', 0)
+                                INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, costo_insumos, estado)
+                                VALUES (1, ?, ?, ?, ?, ?, 'En Proceso')
                             """,
                   (
                       id_cliente_actual,
@@ -2047,7 +2006,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                 cursor_op.execute(
                     """
                                     UPDATE productos 
-                                    SET stock = stock - ?, sincronizado = 0 
+                                    SET stock = stock - ? 
                                     WHERE id = ?
                                 """,
                     (ins["cantidad"], ins["id"]),
@@ -2056,8 +2015,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
               if entrega_svc > 0:
                 cursor_op.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                    VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                    VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
                                 """,
                     (orden_id, entrega_svc, f_v.strftime("%Y-%m-%d")),
                 )
@@ -2067,8 +2026,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
                 if int(cant_c) == 1:
                   cursor_op.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                        VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                        VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO')
                                     """,
                       (orden_id, saldo_restante, f_v.strftime("%Y-%m-%d")),
                   )
@@ -2078,8 +2037,8 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     vencimiento = f_v + relativedelta(months=i)
                     cursor_op.execute(
                         """
-                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
-                                            VALUES (?, ?, ?, 'Pendiente', ?, 0)
+                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas)
+                                            VALUES (?, ?, ?, 'Pendiente', ?)
                                         """,
                         (
                             orden_id,
@@ -2090,7 +2049,6 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     )
 
               conn_op.commit()
-              ejecutar_sincronizacion_completa()
 
               st.session_state.insumos_orden = []
               st.success(
@@ -2365,13 +2323,12 @@ elif choice == "📦 Inventario / Stock":
           with sqlite3.connect(DB_PATH) as conn_inv:
             conn_inv.execute(
                 """
-                            INSERT INTO productos (categoria, marca, capacidad_especificacion, stock, precio_costo, precio_venta, sincronizado)
-                            VALUES (?, ?, ?, ?, ?, ?, 0)
+                            INSERT INTO productos (categoria, marca, capacidad_especificacion, stock, precio_costo, precio_venta)
+                            VALUES (?, ?, ?, ?, ?, ?)
                         """,
                 (cat, mrc, cap, cant_stock, p_costo, p_venta),
             )
             conn_inv.commit()
-            ejecutar_sincronizacion_completa()
           st.success(
               f"✅ ¡{cat} {mrc} ({cap}) cargado correctamente al stock!"
           )
@@ -2504,7 +2461,7 @@ elif choice == "📦 Inventario / Stock":
               conn_prod_up.execute(
                   """
                                 UPDATE productos 
-                                SET categoria = ?, marca = ?, capacidad_especificacion = ?, stock = ?, precio_costo = ?, precio_venta = ?, sincronizado = 0
+                                SET categoria = ?, marca = ?, capacidad_especificacion = ?, stock = ?, precio_costo = ?, precio_venta = ?
                                 WHERE id = ?
                             """,
                   (
@@ -2518,7 +2475,6 @@ elif choice == "📦 Inventario / Stock":
                   ),
               )
               conn_prod_up.commit()
-              ejecutar_sincronizacion_completa()
             st.success(
                 f"✅ ¡Producto ID {id_prod_editar} modificado exitosamente!"
             )
@@ -2543,7 +2499,6 @@ elif choice == "📦 Inventario / Stock":
                 "DELETE FROM productos WHERE id = ?", (id_prod_editar,)
             )
             conn_prod_del.commit()
-            ejecutar_sincronizacion_completa()
           st.error("Producto eliminado del inventario.")
           time.sleep(1)
           st.rerun()

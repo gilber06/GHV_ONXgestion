@@ -13,6 +13,7 @@ from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Tabl
 import streamlit as st
 import pandas as pd
 from modules.database import get_connection  # Importa la conexión híbrida centralizada[cite: 10]
+from sincronizador import ejecutar_sincronizacion_completa
 
 # Determinación inteligente de rutas[cite: 10]
 RUTA_ACTUAL = Path(__file__).resolve()
@@ -51,6 +52,7 @@ def init_db():
             )
         """)
         conn.commit()
+        ejecutar_sincronizacion_completa()
 
 
 def guardar_config_db(clave, valor):
@@ -58,6 +60,7 @@ def guardar_config_db(clave, valor):
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO configuracion (clave, valor) VALUES (?, ?)", (clave, valor))
         conn.commit()
+        ejecutar_sincronizacion_completa()
 
 
 def obtener_config_db(clave):
@@ -82,6 +85,7 @@ def guardar_presupuesto_db(cliente, telefono, total, items, pdf_path):
             VALUES (?, ?, ?, ?, ?, ?)
         """, (fecha_hoy, cliente, telefono, total, items_json, str(pdf_path)))
         conn.commit()
+        ejecutar_sincronizacion_completa()
 
 
 def obtener_historial_presupuestos():

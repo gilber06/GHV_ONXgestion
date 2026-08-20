@@ -1,6 +1,7 @@
 import sqlite3
 import os
 from pathlib import Path
+from sincronizador import ejecutar_sincronizacion_completa
 
 # Intentamos importar libsql para soportar Turso en la nube
 try:
@@ -41,11 +42,12 @@ def inicializar_bd():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 1. TABLAS PRINCIPALES
+    # 1. TABLAS PRINCIPALES (Con columna sincronizado añadida)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS negocios (
             id INTEGER PRIMARY KEY, 
-            nombre TEXT
+            nombre TEXT,
+            sincronizado INTEGER DEFAULT 0
         )
     """)
     
@@ -57,7 +59,8 @@ def inicializar_bd():
             telefono TEXT, 
             ruc_ci TEXT,
             activo INTEGER DEFAULT 1,
-            es_companero BOOLEAN
+            es_companero BOOLEAN,
+            sincronizado INTEGER DEFAULT 0
         )
     """)
 
@@ -71,6 +74,7 @@ def inicializar_bd():
             monto_total REAL, 
             costo_insumos REAL DEFAULT 0, 
             estado TEXT,
+            sincronizado INTEGER DEFAULT 0,
             FOREIGN KEY(negocio_id) REFERENCES negocios(id),
             FOREIGN KEY(cliente_id) REFERENCES clientes(id)
         )
@@ -84,6 +88,7 @@ def inicializar_bd():
             fecha_vencimiento DATE, 
             estado_pago TEXT,
             notas TEXT,
+            sincronizado INTEGER DEFAULT 0,
             FOREIGN KEY(orden_id) REFERENCES ordenes(id)
         )
     """)
@@ -103,6 +108,7 @@ def inicializar_bd():
             estado TEXT DEFAULT 'Pendiente de Revisión',
             fecha_ingreso DATETIME DEFAULT CURRENT_TIMESTAMP,
             fecha_modificacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+            sincronizado INTEGER DEFAULT 0,
             FOREIGN KEY(id_cliente) REFERENCES clientes(id)
         )
     """)
@@ -116,15 +122,17 @@ def inicializar_bd():
             capacidad_especificacion TEXT, 
             stock INTEGER DEFAULT 0, 
             precio_costo REAL DEFAULT 0, 
-            precio_venta REAL DEFAULT 0
+            precio_venta REAL DEFAULT 0,
+            sincronizado INTEGER DEFAULT 0
         )
     """)
 
     # 4. DATOS INICIALES POR DEFECTO
-    cursor.execute("INSERT OR IGNORE INTO negocios (id, nombre) VALUES (1, 'GHV Service')")
-    cursor.execute("INSERT OR IGNORE INTO negocios (id, nombre) VALUES (2, 'OnXpert Software')")
+    cursor.execute("INSERT OR IGNORE INTO negocios (id, nombre, sincronizado) VALUES (1, 'GHV Service', 0)")
+    cursor.execute("INSERT OR IGNORE INTO negocios (id, nombre, sincronizado) VALUES (2, 'OnXpert Software', 0)")
 
     conn.commit()
+    ejecutar_sincronizacion_completa()
     conn.close()
     
     if TURSO_URL and TURSO_TOKEN:

@@ -10,6 +10,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
 from modules.database import get_connection  # Importa la conexión híbrida centralizada
+from sincronizador import ejecutar_sincronizacion_completa
 
 # Determinación inteligente de rutas para assets/ y output/
 RUTA_ACTUAL = Path(__file__).resolve()
@@ -179,7 +180,7 @@ def render():
                             if res_cli:
                                 cliente_id = res_cli[0]
                             else:
-                                cur.execute("INSERT INTO clientes (nombre, telefono) VALUES (?, ?)", (ot_cliente, ot_telefono))
+                                cur.execute("INSERT INTO clientes (nombre, telefono, sincronizado) VALUES (?, ?, 0)", (ot_cliente, ot_telefono))
                                 if hasattr(cur, "lastrowid") and cur.lastrowid:
                                     cliente_id = cur.lastrowid
                                 else:
@@ -189,8 +190,8 @@ def render():
                             # 2. Insertar en ordenes_trabajo
                             cur.execute("""
                                 INSERT INTO ordenes_trabajo 
-                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, monto_presupuesto, estado)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendiente de Revisión')
+                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, monto_presupuesto, estado, sincronizado)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendiente de Revisión', 0)
                             """, (cliente_id, ot_tipo, ot_marca, ot_serie, ot_accesorios, ot_falla, ot_presupuesto))
                             
                             if hasattr(cur, "lastrowid") and cur.lastrowid:
@@ -200,6 +201,7 @@ def render():
                                 nuevo_id_ot = cur.fetchone()[0]
                                 
                             conn_ins.commit()
+                            ejecutar_sincronizacion_completa()
 
                         num_ot_str = f"OT-{nuevo_id_ot:03d}"
                         
@@ -291,10 +293,11 @@ def render():
                         try:
                             with get_connection() as conn_upd:
                                 conn_upd.execute(
-                                    "UPDATE ordenes_trabajo SET estado = ?, fecha_modificacion = CURRENT_TIMESTAMP WHERE id_orden = ?",
+                                    "UPDATE ordenes_trabajo SET estado = ?, fecha_modificacion = CURRENT_TIMESTAMP, sincronizado = 0 WHERE id_orden = ?",
                                     (nuevo_estado, ot['id_orden'])
                                 )
                                 conn_upd.commit()
+                                ejecutar_sincronizacion_completa()
                             st.toast(f"Orden {ot_num} actualizada a '{nuevo_estado}'", icon="🔄")
                             st.rerun()
                         except Exception as e:

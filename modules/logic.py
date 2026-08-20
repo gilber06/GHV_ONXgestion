@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from modules.database import get_connection  # Importa la conexión híbrida centralizada
+from sincronizador import ejecutar_sincronizacion_completa
 
 def registrar_venta_completa(
     cliente_nom,
@@ -22,7 +23,7 @@ def registrar_venta_completa(
 
             # 1. Asegurar cliente y obtener su ID
             cursor.execute(
-                "INSERT OR IGNORE INTO clientes (nombre) VALUES (?)",
+                "INSERT OR IGNORE INTO clientes (nombre, sincronizado) VALUES (?, 0)",
                 (cliente_nom,),
             )
             cursor.execute(
@@ -40,8 +41,8 @@ def registrar_venta_completa(
             fecha_hoy = datetime.now().strftime("%Y-%m-%d")
 
             cursor.execute(
-                """INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, estado) 
-                   VALUES (?, ?, ?, ?, ?, 'Activo')""",
+                """INSERT INTO ordenes (negocio_id, cliente_id, descripcion, fecha_ingreso, monto_total, estado, sincronizado) 
+                   VALUES (?, ?, ?, ?, ?, 'Activo', 0)""",
                 (negocio_id, cliente_id, desc_software, fecha_hoy, monto_total_orden),
             )
             
@@ -58,8 +59,8 @@ def registrar_venta_completa(
 
             for idx, fecha in enumerate(fechas_software, 1):
                 cursor.execute(
-                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas) 
-                       VALUES (?, ?, ?, 'Pendiente', ?)""",
+                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                       VALUES (?, ?, ?, 'Pendiente', ?, 0)""",
                     (
                         orden_id,
                         monto_cuota_sw,
@@ -77,8 +78,8 @@ def registrar_venta_completa(
                 estado = "Pagado" if i == 0 else "Pendiente"
                 
                 cursor.execute(
-                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas) 
-                       VALUES (?, ?, ?, ?, ?)""",
+                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                       VALUES (?, ?, ?, ?, ?, 0)""",
                     (
                         orden_id,
                         monto_membresia,
@@ -89,6 +90,7 @@ def registrar_venta_completa(
                 )
 
             conn.commit()
+            ejecutar_sincronizacion_completa()
             print(f" Venta #{orden_id} registrada con éxito para '{cliente_nom}'.")
             return orden_id
 
