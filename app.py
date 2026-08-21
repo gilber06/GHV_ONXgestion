@@ -1582,7 +1582,7 @@ elif choice == "📝 Órdenes de Trabajo":
 # 9. VISTA: PRESUPUESTOS EXPRESS (MÓDULO)
 # ==========================================
 elif choice == "📄 Presupuestos Express":
-  ejecutar_render_modulo(presupuestos, "Presupuestos Express")
+  ejecutar_render_modulo(presupuestos, "presupuestos")
 
 # ==========================================
 # 10. VISTA: RECORDATORIOS (MÓDULO)
