@@ -13,11 +13,11 @@ DB_LOCAL_PATH = os.path.join(BASE_DIR, "database", "sistema.db")
 PK_MAP = {
     "clientes": "id",
     "negocios": "id",
-    "ordenes": "id_orden",
-    "pagos": "id_pago",
+    "ordenes": "id",
+    "pagos": "id",
     "productos": "id",
-    "ordenes_trabajo": "id_orden_trabajo",
-    "ventas_articulos": "id_venta"
+    "ordenes_trabajo": "id_orden",
+    "ventas_articulos": "id"
 }
 
 def hay_conexion():
