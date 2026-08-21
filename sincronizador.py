@@ -42,7 +42,7 @@ def sincronizar_tabla(nombre_tabla):
 
     try:
         # 1. SUBIR LOCAL -> NUBE (Registros con sincronizado = 0)
-        cursor.execute(f"SELECT * FROM {nombre_tabla} WHERE sincronizado = 0")
+        cursor.execute(f"SELECT * FROM {nombre_tabla} WHERE sincronizado = 0 OR sincronizado IS NULL")
         filas = cursor.fetchall()
         cursor.execute(f"PRAGMA table_info({nombre_tabla})")
         nombres_columnas = [col[1] for col in cursor.fetchall()]
