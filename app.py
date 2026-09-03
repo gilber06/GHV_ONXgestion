@@ -56,6 +56,13 @@ def inicializar_db():
                     (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT, es_companero BOOLEAN)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
                     (id INTEGER PRIMARY KEY, nombre TEXT, sincronizado INTEGER DEFAULT 0)""")
+# Asegurar que la columna sincronizado exista aunque la tabla sea vieja
+    cursor.execute("PRAGMA table_info(negocios)")
+    cols_n = [info[1] for info in cursor.fetchall()]
+    if "sincronizado" not in cols_n:
+      cursor.execute(
+          "ALTER TABLE negocios ADD COLUMN sincronizado INTEGER DEFAULT 0"
+      )                
     cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
                     (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
                      descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
