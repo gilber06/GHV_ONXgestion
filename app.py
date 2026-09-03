@@ -55,7 +55,7 @@ def inicializar_db():
     cursor.execute("""CREATE TABLE IF NOT EXISTS clientes 
                     (id INTEGER PRIMARY KEY, nombre TEXT, apodo TEXT, telefono TEXT, es_companero BOOLEAN)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS negocios 
-                    (id INTEGER PRIMARY KEY, nombre TEXT)""")
+                    (id INTEGER PRIMARY KEY, nombre TEXT, sincronizado INTEGER DEFAULT 0)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS ordenes 
                     (id INTEGER PRIMARY KEY, negocio_id INTEGER, cliente_id INTEGER, 
                      descripcion TEXT, fecha_ingreso TEXT, monto_total REAL, 
