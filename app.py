@@ -2557,16 +2557,16 @@ elif choice == "⚙️ Configuración / Mi Negocio":
   ejecutar_render_modulo(mi_negocio, "Mi Negocio / Configuración")
 
 # --- HERRAMIENTA TEMPORAL PARA BORRAR IDS ---
-with st.sidebar.expander("🛠️ Borrar registros erróneos"):
+with st.sidebar.expander("🛠️ Borrar registros erróneos (pagos)"):
   ids_a_borrar = st.text_input("IDs a eliminar:", value="112, 113, 114")
-  if st.button("🗑️ Ejecutar Eliminación"):
+  if st.button("🗑️ Ejecutar Eliminación en Pagos"):
     try:
       ids_list = [int(x.strip()) for x in ids_a_borrar.split(",") if x.strip()]
       if ids_list:
         with sqlite3.connect("database/sistema.db") as conn:
           placeholders = ",".join(["?"] * len(ids_list))
           conn.execute(
-              f"DELETE FROM cobros WHERE id IN ({placeholders})", ids_list
+              f"DELETE FROM pagos WHERE id IN ({placeholders})", ids_list
           )
           conn.commit()
         st.success(f"¡Registros {ids_list} eliminados con éxito!")
