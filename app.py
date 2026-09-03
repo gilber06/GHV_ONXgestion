@@ -2573,3 +2573,16 @@ with st.sidebar.expander("🛠️ Borrar registros erróneos"):
         st.rerun()
     except Exception as e:
       st.error(f"Error: {e}")
+
+with st.sidebar.expander("🛠️ Ver tablas de la BD"):
+  if st.button("🔍 Mostrar tablas"):
+    try:
+      with sqlite3.connect("database/sistema.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        )
+        tablas = cursor.fetchall()
+      st.success(f"Tablas encontradas: {tablas}")
+    except Exception as e:
+      st.error(f"Error: {e}")      
