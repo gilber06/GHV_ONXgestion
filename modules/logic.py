@@ -14,27 +14,31 @@ def registrar_venta_completa(
 ):
     """
     Registra una venta completa (Software + Membresía recurrente) utilizando la conexión híbrida.
-    Retorna el ID de la orden generada.
+    Retorna el ID de la orden generada o None si falla el almacenamiento local.
     """
     try:
         # El bloque 'with' maneja la conexión mediante get_connection()
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Asegurar cliente y obtener su ID
-            cursor.execute(
-                "INSERT OR IGNORE INTO clientes (nombre, sincronizado) VALUES (?, 0)",
-                (cliente_nom,),
-            )
+            # 1. Asegurar cliente y obtener su ID de forma segura
             cursor.execute(
                 "SELECT id FROM clientes WHERE nombre = ?", (cliente_nom,)
             )
             res_cliente = cursor.fetchone()
             
-            if not res_cliente:
-                raise ValueError(f"No se pudo obtener el ID del cliente: {cliente_nom}")
-            
-            cliente_id = res_cliente[0]
+            if res_cliente:
+                cliente_id = res_cliente[0]
+            else:
+                cursor.execute(
+                    "INSERT INTO clientes (nombre, sincronizado) VALUES (?, 0)",
+                    (cliente_nom,),
+                )
+                if hasattr(cursor, "lastrowid") and cursor.lastrowid:
+                    cliente_id = cursor.lastrowid
+                else:
+                    cursor.execute("SELECT MAX(id) FROM clientes")
+                    cliente_id = cursor.fetchone()[0]
 
             # 2. Registrar la Orden de Venta
             monto_total_orden = monto_software + (monto_membresia * cuotas_membresia)
@@ -90,12 +94,18 @@ def registrar_venta_completa(
                 )
 
             conn.commit()
+            print(f"✅ Venta #{orden_id} guardada localmente con éxito para '{cliente_nom}'.")
+
+        # 5. Fase de sincronización independiente (No bloquea el guardado si falla la red)
+        try:
             ejecutar_sincronizacion_completa()
-            print(f" Venta #{orden_id} registrada con éxito para '{cliente_nom}'.")
-            return orden_id
+        except Exception as sync_error:
+            print(f"⚠️ Aviso: Los datos se guardaron localmente, pero falló la sincronización en la nube: {sync_error}")
+
+        return orden_id
 
     except Exception as e:
-        print(f"❌ Error al registrar la venta: {e}")
+        print(f"❌ Error crítico al registrar la venta en la base de datos: {e}")
         return None
 
 
