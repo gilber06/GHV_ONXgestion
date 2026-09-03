@@ -2585,4 +2585,18 @@ with st.sidebar.expander("🛠️ Ver tablas de la BD"):
         tablas = cursor.fetchall()
       st.success(f"Tablas encontradas: {tablas}")
     except Exception as e:
-      st.error(f"Error: {e}")      
+      st.error(f"Error: {e}")
+
+with st.sidebar.expander("🛠️ Reparar Nota ID 91"):
+  if st.button("📝 Restaurar nota original"):
+    try:
+      with sqlite3.connect("database/sistema.db") as conn:
+        conn.execute(
+            "UPDATE pagos SET notas = ? WHERE id = 91",
+            ("SOFTWARE / IMPLEMENTACIÓN",),
+        )
+        conn.commit()
+      st.success("¡Nota restaurada con éxito!")
+      st.rerun()
+    except Exception as e:
+      st.error(f"Error: {e}")            
