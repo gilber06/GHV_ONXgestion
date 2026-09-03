@@ -73,7 +73,7 @@ def inicializar_db():
     cursor.execute("SELECT COUNT(*) FROM negocios")
     if cursor.fetchone()[0] == 0:
         cursor.executemany(
-            "INSERT INTO negocios (id, nombre, sincronizado) VALUES (?,?,0)",
+            "INSERT OR IGNORE INTO negocios (id, nombre, sincronizado) VALUES (?,?,?)",
             [(1, "GHV Service"), (2, "OnXpert Software")],
         )
 
