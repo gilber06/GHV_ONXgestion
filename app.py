@@ -74,7 +74,7 @@ def inicializar_db():
     if cursor.fetchone()[0] == 0:
         cursor.executemany(
             "INSERT OR IGNORE INTO negocios (id, nombre, sincronizado) VALUES (?,?,?)",
-            [(1, "GHV Service"), (2, "OnXpert Software")],
+            [(1, "GHV Service", 0), (2, "OnXpert Software", 0)],
         )
 
     cursor.execute("""CREATE TABLE IF NOT EXISTS ventas_articulos 
