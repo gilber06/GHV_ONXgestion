@@ -2590,47 +2590,46 @@ elif choice == "📦 Inventario / Stock":
 elif choice == "⚙️ Configuración / Mi Negocio":
   ejecutar_render_modulo(mi_negocio, "Mi Negocio / Configuración")
 
-# --- HERRAMIENTA TEMPORAL PARA BORRAR IDS ---
-with st.sidebar.expander("🛠️ Borrar registros erróneos (pagos)"):
-  ids_a_borrar = st.text_input("IDs a eliminar:", value="112, 113, 114")
-  if st.button("🗑️ Ejecutar Eliminación en Pagos"):
-    try:
-      ids_list = [int(x.strip()) for x in ids_a_borrar.split(",") if x.strip()]
-      if ids_list:
-        with sqlite3.connect("database/sistema.db") as conn:
-          placeholders = ",".join(["?"] * len(ids_list))
-          conn.execute(
-              f"DELETE FROM pagos WHERE id IN ({placeholders})", ids_list
-          )
-          conn.commit()
-        st.success(f"¡Registros {ids_list} eliminados con éxito!")
-        st.rerun()
-    except Exception as e:
-      st.error(f"Error: {e}")
+# --- HERRAMIENTAS DE MANTENIMIENTO ---
+with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
+    
+    st.subheader("Borrar Pagos Erróneos")
+    ids_a_borrar = st.text_input("IDs a eliminar:", value="")
+    if st.button("🗑️ Ejecutar Eliminación"):
+        try:
+            ids_list = [int(x.strip()) for x in ids_a_borrar.split(",") if x.strip()]
+            if ids_list:
+                with obtener_conexion() as conn:
+                    placeholders = ",".join(["?"] * len(ids_list))
+                    conn.execute(f"DELETE FROM pagos WHERE id IN ({placeholders})", ids_list)
+                    conn.commit()
+                st.success(f"¡Registros {ids_list} eliminados con éxito!")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-with st.sidebar.expander("🛠️ Ver tablas de la BD"):
-  if st.button("🔍 Mostrar tablas"):
-    try:
-      with sqlite3.connect("database/sistema.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table';"
-        )
-        tablas = cursor.fetchall()
-      st.success(f"Tablas encontradas: {tablas}")
-    except Exception as e:
-      st.error(f"Error: {e}")
+    st.markdown("---")
+    st.subheader("Ver Tablas de la BD")
+    if st.button("🔍 Mostrar tablas"):
+        try:
+            with obtener_conexion() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tablas = cursor.fetchall()
+            st.success(f"Tablas encontradas: {tablas}")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-with st.sidebar.expander("🛠️ Reparar Nota ID 91"):
-  if st.button("📝 Restaurar nota original"):
-    try:
-      with sqlite3.connect("database/sistema.db") as conn:
-        conn.execute(
-            "UPDATE pagos SET notas = ? WHERE id = 91",
-            ("SOFTWARE / IMPLEMENTACIÓN",),
-        )
-        conn.commit()
-      st.success("¡Nota restaurada con éxito!")
-      st.rerun()
-    except Exception as e:
-      st.error(f"Error: {e}")            
+    st.markdown("---")
+    st.subheader("Reparaciones Rápidas")
+    id_nota = st.number_input("ID a reparar:", min_value=1, value=91, step=1)
+    nueva_nota = st.text_input("Texto de la nota:", value="SOFTWARE / IMPLEMENTACIÓN")
+    if st.button("📝 Actualizar Nota"):
+        try:
+            with obtener_conexion() as conn:
+                conn.execute("UPDATE pagos SET notas = ? WHERE id = ?", (nueva_nota, int(id_nota)))
+                conn.commit()
+            st.success(f"¡Nota del ID {id_nota} actualizada con éxito!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")            
