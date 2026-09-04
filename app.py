@@ -2637,3 +2637,19 @@ with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
                 st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
+
+import os
+import streamlit as st
+
+# Prueba rápida de conexión en pantalla
+turso_url_check = None
+try:
+    if hasattr(st, "secrets") and "TURSO_DATABASE_URL" in st.secrets:
+        turso_url_check = st.secrets["TURSO_DATABASE_URL"]
+except Exception:
+    pass
+
+if turso_url_check:
+    st.success("🟢 La web ESTÁ conectada a Turso (Nube)")
+else:
+    st.error("🔴 La web ESTÁ usando SQLite local (Archivo viejo)")

@@ -1,7 +1,12 @@
 import sqlite3
 import os
 from pathlib import Path
+import streamlit as st
+from dotenv import load_dotenv
 from sincronizador import ejecutar_sincronizacion_completa
+
+# Forzar la carga del archivo .env al arrancar (para entorno local)
+load_dotenv()
 
 # Intentamos importar libsql para soportar Turso en la nube
 try:
@@ -9,10 +14,6 @@ try:
     LIBSQL_DISPONIBLE = True
 except ImportError:
     LIBSQL_DISPONIBLE = False
-
-# Variables de entorno para Turso (si están configuradas)
-TURSO_URL = os.environ.get("TURSO_DATABASE_URL")
-TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 
 # Determina la ruta raíz del proyecto de forma inteligente
 RUTA_ACTUAL = Path(__file__).resolve()
@@ -27,11 +28,28 @@ DB_PATH = BASE_DIR / "database" / "sistema.db"
 def get_connection():
     """
     Retorna una conexión a la base de datos de forma inteligente:
-    - Si detecta credenciales de Turso y la librería, conecta a la nube.
-    - Si no, utiliza el archivo SQLite local de siempre.
+    - Prioriza st.secrets (para Streamlit Cloud en la web).
+    - Luego busca en variables de entorno / .env (para tu PC local).
+    - Si no encuentra nada, utiliza el archivo SQLite local de respaldo.
     """
-    if TURSO_URL and TURSO_TOKEN and LIBSQL_DISPONIBLE:
-        return libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
+    turso_url = None
+    turso_token = None
+
+    # 1. Intentar leer desde los secretos de Streamlit Cloud
+    try:
+        if hasattr(st, "secrets") and "TURSO_DATABASE_URL" in st.secrets:
+            turso_url = st.secrets["TURSO_DATABASE_URL"]
+            turso_token = st.secrets["TURSO_AUTH_TOKEN"]
+    except Exception:
+        pass
+
+    # 2. Si no está en st.secrets, buscar en las variables de entorno (.env)
+    if not turso_url:
+        turso_url = os.environ.get("TURSO_DATABASE_URL")
+        turso_token = os.environ.get("TURSO_AUTH_TOKEN")
+
+    if turso_url and turso_token and LIBSQL_DISPONIBLE:
+        return libsql.connect(database=turso_url, auth_token=turso_token)
     else:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         return sqlite3.connect(DB_PATH)
@@ -132,10 +150,25 @@ def inicializar_bd():
     cursor.execute("INSERT OR IGNORE INTO negocios (id, nombre, sincronizado) VALUES (2, 'OnXpert Software', 0)")
 
     conn.commit()
-    ejecutar_sincronizacion_completa()
+    
+    # Comprobamos las credenciales activas para el mensaje de consola
+    url_check = None
+    try:
+        if hasattr(st, "secrets") and "TURSO_DATABASE_URL" in st.secrets:
+            url_check = st.secrets["TURSO_DATABASE_URL"]
+    except Exception:
+        pass
+    if not url_check:
+        url_check = os.environ.get("TURSO_DATABASE_URL")
+    
+    try:
+        ejecutar_sincronizacion_completa()
+    except Exception:
+        pass
+        
     conn.close()
     
-    if TURSO_URL and TURSO_TOKEN:
+    if url_check:
         print("Base de datos inicializada correctamente en la nube (Turso).")
     else:
         print(f"Base de datos local inicializada correctamente en: {DB_PATH}")
