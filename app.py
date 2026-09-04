@@ -1,4 +1,4 @@
-from sincronizador import ejecutar_sincronizacion_completa
+#from sincronizador import ejecutar_sincronizacion_completa
 import os
 import sqlite3
 import time
@@ -7,7 +7,21 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
+load_dotenv()
+
+TURSO_URL = os.getenv("libsql://onxpert-software-gilber06.aws-us-east-1.turso.io")
+TURSO_TOKEN = os.getenv("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODg1MjgzMzYsImlkIjoiMDFhMDAwZGMtNTUwMS03NGE4LWIzOTUtZTYzODU5NDBmNWNlIiwia2lkIjoiQ3NGcF90em1ueXJDUTFqWGozUVNkVW5nMU5Ca3IwZ2NZWW1OSFUwQlp2VSIsInJpZCI6ImEyY2IxMDE3LWQ4YWUtNDhiYi1iMzczLTY0MzJjZWJmNDBlMiJ9.Kyk9_lWr2y8I6jOLgGMt9P4oNENCsG5pGPwgyVhXH2uZ0iS_ic2jbF8jDfd3MEy1OzdQfY9lAtoWIwoltLEZBQ")
+
+
+def obtener_conexion():
+  if TURSO_URL and TURSO_TOKEN:
+    import libsql
+
+    return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+  else:
+    return sqlite3.connect(DB_PATH)
 # ----------------------------------------------------
 # IMPORTACIÓN DE MÓDULOS DE LA CARPETA /modules
 # ----------------------------------------------------
@@ -31,6 +45,10 @@ try:
 except ImportError:
     st.error("Por favor, instala plotly ejecutando: pip install plotly")
 
+# Definición de la ruta robusta a la base de datos dentro de la carpeta 'database'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "database", "sistema.db")
+
 # ==========================================
 # 1. CONFIGURACIÓN Y PARCHE DE BASE DE DATOS
 # ==========================================
@@ -38,17 +56,12 @@ st.set_page_config(
     page_title="GHV - Service & OnXpert", layout="wide", page_icon="📈"
 )
 
-# Definición de la ruta robusta a la base de datos dentro de la carpeta 'database'
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database", "sistema.db")
-
-
 def inicializar_db():
     # Asegurar que la carpeta database exista físicamente
     if not os.path.exists(os.path.join(BASE_DIR, "database")):
         os.makedirs(os.path.join(BASE_DIR, "database"))
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = obtener_conexion()
     cursor = conn.cursor()
     
     # Creación de tablas base
@@ -145,25 +158,25 @@ def inicializar_db():
 inicializar_db()
 
 # 2. SEGUNDO: Sincronización inicial al abrir la app (solo una vez por sesión)
-if "sincronizado_inicial" not in st.session_state:
-    try:
-        ejecutar_sincronizacion_completa()
-        st.session_state["sincronizado_inicial"] = True
-    except Exception as e:
-        st.error(f"Error en sincronización inicial: {e}")
+#if "sincronizado_inicial" not in st.session_state:
+#    try:
+#        #ejecutar_sincronizacion_completa()
+#        st.session_state["sincronizado_inicial"] = True
+#    except Exception as e:
+#        st.error(f"Error en sincronización inicial: {e}")
 
 # --- BOTÓN DE SINCRONIZACIÓN MANUAL (SIDEBAR) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("☁️ Control de Nube")
+#st.sidebar.markdown("---")
+#st.sidebar.subheader("☁️ Control de Nube")
 
-if st.sidebar.button("🔄 Sincronizar Ahora"):
-    with st.sidebar.spinner('Conectando con Supabase...'):
-        try:
-            ejecutar_sincronizacion_completa()
-            st.sidebar.success("¡Sincronización completa!")
-        except Exception as e:
-            st.sidebar.error(f"Error: {e}")
-            st.sidebar.write("Verifica tu conexión a internet o la clave de Supabase.")
+#if st.sidebar.button("🔄 Sincronizar Ahora"):
+#    with st.sidebar.spinner('Conectando con Supabase...'):
+#        try:
+#            ejecutar_sincronizacion_completa()
+#            st.sidebar.success("¡Sincronización completa!")
+#        except Exception as e:
+#            st.sidebar.error(f"Error: {e}")
+#            st.sidebar.write("Verifica tu conexión a internet o la clave de Supabase.")
 
 # ==========================================
 # 2. FUNCIONES DE LÓGICA DE NEGOCIO
@@ -255,7 +268,7 @@ def registrar_venta_onxpert(
       )
 
   conn.commit()
-  ejecutar_sincronizacion_completa()
+  #ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -271,7 +284,7 @@ def actualizar_datos_cliente(
       (nuevo_nombre, nueva_empresa, nuevo_telefono, nuevo_ruc, id_cliente),
   )
   conn.commit()
-  ejecutar_sincronizacion_completa()
+  #ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -283,7 +296,7 @@ def cambiar_estado_cliente(id_cliente, activo=True):
       "UPDATE clientes SET activo = ?, sincronizado = 0 WHERE id = ?", (estado, id_cliente)
   )
   conn.commit()
-  ejecutar_sincronizacion_completa()
+  #ejecutar_sincronizacion_completa()
   conn.close()
 
 
@@ -537,7 +550,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
                   ),
               )
               conn_ot.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
               nueva_ot_id = cursor_ot.lastrowid
             st.success(
                 "✅ ¡Equipo registrado exitosamente con la Orden de Trabajo N°"
@@ -729,7 +742,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
               )
 
             conn_up_ot.commit()
-            ejecutar_sincronizacion_completa()
+            #ejecutar_sincronizacion_completa()
           st.success("✅ ¡Orden de Trabajo de Taller actualizada!")
           time.sleep(1)
           st.rerun()
@@ -903,7 +916,7 @@ elif choice == "🗓️ Cobros Pendientes":
                   (pago_id,),
               )
               conn.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
               st.success("¡Pago marcado como Pagado!")
               time.sleep(1)
               st.rerun()
@@ -924,17 +937,16 @@ elif choice == "🗓️ Cobros Pendientes":
                 conn_reprog.execute(
                     """
                                     UPDATE pagos 
-                                    SET fecha_vencimiento = ?, notas = ?, sincronizado = 0 
+                                    SET fecha_vencimiento = ?, sincronizado = 0 
                                     WHERE id = ?
                                 """,
                     (
                         nueva_fecha.strftime("%Y-%m-%d"),
-                        nota_reprog.upper(),
                         pago_id,
                     ),
                 )
                 conn_reprog.commit()
-                ejecutar_sincronizacion_completa()
+                #ejecutar_sincronizacion_completa()
               st.success(f"Vencimiento movido al {nueva_fecha}")
               time.sleep(1)
               st.rerun()
@@ -993,7 +1005,7 @@ elif choice == "🗓️ Cobros Pendientes":
                   )
 
                 conn_div.commit()
-                ejecutar_sincronizacion_completa()
+                #ejecutar_sincronizacion_completa()
               st.success(
                   f"✅ ¡Pago divido exitosamente en {num_partes} cuotas!"
               )
@@ -1039,9 +1051,23 @@ elif choice == "🗓️ Cobros Pendientes":
     if st.button("🗑️ Eliminar Permanentemente"):
       conn.execute("DELETE FROM pagos WHERE id = ?", (id_borrar,))
       conn.commit()
-      ejecutar_sincronizacion_completa()
+      #ejecutar_sincronizacion_completa()
       st.rerun()
 
+  with st.expander("✏️ Editar Nota Manualmente"):
+    id_nota = st.number_input(
+        "ID del pago a modificar", min_value=1, step=1, key="input_id_nota"
+    )
+    texto_nota = st.text_input("Texto de la nota", key="input_texto_nota")
+    if st.button("Actualizar Nota en BD"):
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE pagos SET notas = ?, sincronizado = 0 WHERE id = ?",
+            (texto_nota.upper(), id_nota),
+        )
+        conn.commit()
+      st.success(f"¡Nota actualizada para el ID {id_nota}!")
+      st.rerun()
 # ==========================================
 # 7. VISTA: GESTIÓN DE CLIENTES
 # ==========================================
@@ -1107,7 +1133,7 @@ elif choice == "👥 Gestión de Clientes":
                   (nombre_norm, empresa_norm, telefono.strip(), ruc_norm),
               )
               conn_local.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
               st.success(
                   f"✅ ¡Registro exitoso! '{nombre_norm}' guardado"
                   " correctamente."
@@ -1474,7 +1500,7 @@ elif choice == "📝 Órdenes de Trabajo":
                 )
 
           conn_edit.commit()
-          ejecutar_sincronizacion_completa()
+          #ejecutar_sincronizacion_completa()
 
         st.success(
             f"✅ ¡OT {id_actualizar} reajustada y actualizada correctamente!"
@@ -1516,7 +1542,7 @@ elif choice == "📝 Órdenes de Trabajo":
                 "DELETE FROM pagos WHERE orden_id = ?", (ot_sel_borrar,)
             )
             conn_del.commit()
-            ejecutar_sincronizacion_completa()
+            #ejecutar_sincronizacion_completa()
 
           st.success(f"✅ OT {ot_sel_borrar} enviada a la papelera.")
           time.sleep(1)
@@ -1559,7 +1585,7 @@ elif choice == "📝 Órdenes de Trabajo":
                 (int(ultima["id"]),),
             )
             conn_undo.commit()
-            ejecutar_sincronizacion_completa()
+            #ejecutar_sincronizacion_completa()
 
           st.success("Orden recuperada correctamente.")
           st.rerun()
@@ -1579,7 +1605,7 @@ elif choice == "📝 Órdenes de Trabajo":
         with sqlite3.connect(DB_PATH) as conn_clear:
           conn_clear.execute("DELETE FROM historial_eliminacion")
           conn_clear.commit()
-          ejecutar_sincronizacion_completa()
+          #ejecutar_sincronizacion_completa()
         st.success("Papelera vaciada con éxito.")
         st.rerun()
       except Exception as e:
@@ -1654,7 +1680,7 @@ elif choice == "✅ Historial de Cobrados":
               (int(id_pago_sel),),
           )
           conn_rev.commit()
-          ejecutar_sincronizacion_completa()
+          #ejecutar_sincronizacion_completa()
         st.success(
             f"✅ El pago ID #{id_pago_sel} volvió a Cobros Pendientes."
         )
@@ -1865,7 +1891,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     )
 
               conn_op.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
               st.success("✅ ¡Venta registrada exitosamente!")
               time.sleep(1)
               st.rerun()
@@ -2097,7 +2123,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     )
 
               conn_op.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
 
               st.session_state.insumos_orden = []
               st.success(
@@ -2378,7 +2404,7 @@ elif choice == "📦 Inventario / Stock":
                 (cat, mrc, cap, cant_stock, p_costo, p_venta),
             )
             conn_inv.commit()
-            ejecutar_sincronizacion_completa()
+            #ejecutar_sincronizacion_completa()
           st.success(
               f"✅ ¡{cat} {mrc} ({cap}) cargado correctamente al stock!"
           )
@@ -2525,7 +2551,7 @@ elif choice == "📦 Inventario / Stock":
                   ),
               )
               conn_prod_up.commit()
-              ejecutar_sincronizacion_completa()
+              #ejecutar_sincronizacion_completa()
             st.success(
                 f"✅ ¡Producto ID {id_prod_editar} modificado exitosamente!"
             )
@@ -2550,7 +2576,7 @@ elif choice == "📦 Inventario / Stock":
                 "DELETE FROM productos WHERE id = ?", (id_prod_editar,)
             )
             conn_prod_del.commit()
-            ejecutar_sincronizacion_completa()
+            #ejecutar_sincronizacion_completa()
           st.error("Producto eliminado del inventario.")
           time.sleep(1)
           st.rerun()

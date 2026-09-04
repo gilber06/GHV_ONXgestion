@@ -10,9 +10,6 @@ __pycache__/
 .env
 .vscode/
 
-# Bases de datos locales (IMPORTANTE: Esto evita que Streamlit use el archivo viejo)
-database/
-sistema.db
 
 # Otros archivos de datos
 *.exe
