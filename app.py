@@ -7,13 +7,14 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-load_dotenv()
-
-TURSO_URL = os.getenv("libsql://onxpert-software-gilber06.aws-us-east-1.turso.io")
-TURSO_TOKEN = os.getenv("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODg1MjgzMzYsImlkIjoiMDFhMDAwZGMtNTUwMS03NGE4LWIzOTUtZTYzODU5NDBmNWNlIiwia2lkIjoiQ3NGcF90em1ueXJDUTFqWGozUVNkVW5nMU5Ca3IwZ2NZWW1OSFUwQlp2VSIsInJpZCI6ImEyY2IxMDE3LWQ4YWUtNDhiYi1iMzczLTY0MzJjZWJmNDBlMiJ9.Kyk9_lWr2y8I6jOLgGMt9P4oNENCsG5pGPwgyVhXH2uZ0iS_ic2jbF8jDfd3MEy1OzdQfY9lAtoWIwoltLEZBQ")
-
+TURSO_URL = os.getenv("TURSO_DATABASE_URL")
+TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
 def obtener_conexion():
   if TURSO_URL and TURSO_TOKEN:
