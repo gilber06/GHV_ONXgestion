@@ -2622,14 +2622,18 @@ with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
 
     st.markdown("---")
     st.subheader("Reparaciones Rápidas")
-    id_nota = st.number_input("ID a reparar:", min_value=1, value=91, step=1)
-    nueva_nota = st.text_input("Texto de la nota:", value="SOFTWARE / IMPLEMENTACIÓN")
+    id_nota_str = st.text_input("ID a reparar:", value="")
+    nueva_nota = st.text_input("Texto de la nota:", value="")
     if st.button("📝 Actualizar Nota"):
         try:
-            with obtener_conexion() as conn:
-                conn.execute("UPDATE pagos SET notas = ? WHERE id = ?", (nueva_nota, int(id_nota)))
-                conn.commit()
-            st.success(f"¡Nota del ID {id_nota} actualizada con éxito!")
-            st.rerun()
+            if not id_nota_str.strip():
+                st.warning("Por favor ingresa un ID.")
+            else:
+                id_nota = int(id_nota_str.strip())
+                with obtener_conexion() as conn:
+                    conn.execute("UPDATE pagos SET notas = ? WHERE id = ?", (nueva_nota, id_nota))
+                    conn.commit()
+                st.success(f"¡Nota del ID {id_nota} actualizada con éxito!")
+                st.rerun()
         except Exception as e:
-            st.error(f"Error: {e}")            
+            st.error(f"Error: {e}")
