@@ -875,7 +875,7 @@ elif choice == "📅 Cobros Pendientes":
     column_names = [desc[0] for desc in cursor.description]
     df_p = pd.DataFrame(rows, columns=column_names)
 
-  if not df_p.empty:
+    if not df_p.empty:
     clientes_con_deuda = df_p["Empresa"].unique()
 
     for empresa in clientes_con_deuda:
