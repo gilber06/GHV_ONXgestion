@@ -1053,7 +1053,7 @@ elif choice == "📅 Cobros Pendientes":
         "Total General a Cobrar", f"{int(total_general):,} Gs.".replace(",", ".")
     )
 
-  else:
+else:
     st.info("No hay cobros pendientes por el momento.")
 
   st.markdown("---")
