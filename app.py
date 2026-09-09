@@ -62,7 +62,7 @@ def inicializar_db():
     if not os.path.exists(os.path.join(BASE_DIR, "database")):
         os.makedirs(os.path.join(BASE_DIR, "database"))
 
-    conn = obtener_conexion()
+    conn = get_connection()
     cursor = conn.cursor()
     
     # Creación de tablas base
@@ -2599,7 +2599,7 @@ with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
         try:
             ids_list = [int(x.strip()) for x in ids_a_borrar.split(",") if x.strip()]
             if ids_list:
-                with obtener_conexion() as conn:
+                with get_connection() as conn:
                     placeholders = ",".join(["?"] * len(ids_list))
                     conn.execute(f"DELETE FROM pagos WHERE id IN ({placeholders})", ids_list)
                     conn.commit()
@@ -2612,7 +2612,7 @@ with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
     st.subheader("Ver Tablas de la BD")
     if st.button("🔍 Mostrar tablas"):
         try:
-            with obtener_conexion() as conn:
+            with get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
                 tablas = cursor.fetchall()
@@ -2630,7 +2630,7 @@ with st.sidebar.expander("🛠️ Herramientas de Mantenimiento"):
                 st.warning("Por favor ingresa un ID.")
             else:
                 id_nota = int(id_nota_str.strip())
-                with obtener_conexion() as conn:
+                with get_connection() as conn:
                     conn.execute("UPDATE pagos SET notas = ? WHERE id = ?", (nueva_nota, id_nota))
                     conn.commit()
                 st.success(f"¡Nota del ID {id_nota} actualizada con éxito!")
