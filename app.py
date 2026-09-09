@@ -869,7 +869,7 @@ elif choice == "🗓️ Cobros Pendientes":
         LEFT JOIN negocios n ON o.negocio_id = n.id
         WHERE p.estado = 'Pendiente'
         ORDER BY p.fecha_vencimiento ASC
-    """
+        """
     )
     rows = cursor.fetchall()
     column_names = [desc[0] for desc in cursor.description]
