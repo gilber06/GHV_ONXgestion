@@ -843,7 +843,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
 # ==========================================
 elif choice == "🗓️ Cobros Pendientes":
   st.title("Control de Cobros")
-
+conn = get_connection()
   df_p = pd.read_sql_query(
       """
         SELECT p.id as ID, 
@@ -917,7 +917,7 @@ elif choice == "🗓️ Cobros Pendientes":
                   (pago_id,),
               )
               conn.commit()
-              #ejecutar_sincronizacion_completa()
+              ejecutar_sincronizacion_completa()
               st.success("¡Pago marcado como Pagado!")
               time.sleep(1)
               st.rerun()
