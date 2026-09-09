@@ -852,16 +852,16 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
 elif choice == "🗓️ Cobros Pendientes":
   st.title("Control de Cobros")
   conn = get_connection()
-  df_p = pd.read_sql_query(
-      """
-        SELECT p.id as ID, 
+  cursor = conn.execute(
+        """
+        SELECT p.id as ID,
                COALESCE(n.nombre, 'Sin Negocio') as Negocio,
                COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa,
                c.nombre as Contacto,
                p.monto_cuota as Monto,
                p.fecha_vencimiento as Vence,
                o.descripcion as Detalle,
-               c.telefono as Telefono, 
+               c.telefono as Telefono,
                p.notas as Notas
         FROM pagos p
         JOIN ordenes o ON p.orden_id = o.id
@@ -869,9 +869,11 @@ elif choice == "🗓️ Cobros Pendientes":
         LEFT JOIN negocios n ON o.negocio_id = n.id
         WHERE p.estado = 'Pendiente'
         ORDER BY p.fecha_vencimiento ASC
-    """,
-      conn,
-  )
+    """
+    )
+    rows = cursor.fetchall()
+    column_names = [desc[0] for desc in cursor.description]
+    df_p = pd.DataFrame(rows, columns=column_names)
 
   if not df_p.empty:
     clientes_con_deuda = df_p["Empresa"].unique()
