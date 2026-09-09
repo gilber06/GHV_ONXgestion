@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
-from modules.database import get_connection  # Importa la conexión híbrida centralizada
+from database import get_connection
 from sincronizador import ejecutar_sincronizacion_completa
 
 # Determinación inteligente de rutas para assets/ y output/
@@ -316,3 +316,72 @@ def render():
                         
                         wa_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(txt_wa)}"
                         st.link_button(f"📲 Avisar por WhatsApp ({nuevo_estado})", wa_url, use_container_width=True)
+
+st.markdown("---")
+st.subheader("✏️ Modificación Rápida de Órdenes de Trabajo")
+
+# Obtenemos la conexión usando tu función centralizada de database.py
+conn = get_connection()
+cursor = conn.cursor()
+
+# Consultamos las órdenes existentes para listarlas en el selectbox
+cursor.execute("""
+    SELECT o.id, n.nombre, c.nombre, o.descripcion, o.fecha_ingreso, o.monto_total 
+    FROM ordenes o
+    LEFT JOIN negocios n ON o.negocio_id = n.id
+    LEFT JOIN clientes c ON o.cliente_id = c.id
+    ORDER BY o.id DESC
+""")
+lista_ots = cursor.fetchall()
+
+if lista_ots:
+    # Creamos un diccionario para mostrar una etiqueta descriptiva en el selectbox (ej: "OT 60 - JORGE CANTUNI")
+    opciones_ots = {row[0]: f"OT {row[0]} | {row[1]} | {row[2]} - {row[3][:30]}..." for row in lista_ots}
+    
+    ot_seleccionada = st.selectbox(
+        "Seleccione la OT que desea modificar:",
+        options=list(opciones_ots.keys()),
+        format_func=lambda x: opciones_ots[x]
+    )
+    
+    # Buscamos los datos actuales de la OT elegida
+    cursor.execute("SELECT negocio_id, fecha_ingreso, descripcion, monto_total, estado FROM ordenes WHERE id = ?", (ot_seleccionada,))
+    datos_actuales = cursor.fetchone()
+    
+    if datos_actuales:
+        neg_actual, fecha_actual, desc_actual, monto_actual, estado_actual = datos_actuales
+        
+        with st.form(f"form_editar_ot_{ot_seleccionada}"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Selector de Negocio (1: GHV Service, 2: OnXpert Software)
+                nuevo_negocio = st.selectbox(
+                    "Negocio",
+                    options=[1, 2],
+                    format_func=lambda x: "GHV Service" if x == 1 else "OnXpert Software",
+                    index=0 if neg_actual == 1 else 1
+                )
+                
+                nueva_fecha = st.text_input("Fecha de Ingreso (YYYY-MM-DD)", value=str(fecha_actual))
+                
+            with col2:
+                nuevo_monto = st.number_input("Monto Total (Gs.)", value=float(monto_actual), step=1000.0)
+                nuevo_estado = st.selectbox("Estado", options=["Venta", "En Proceso", "Pendiente de Revisión"], index=["Venta", "En Proceso", "Pendiente de Revisión"].index(estado_actual) if estado_actual in ["Venta", "En Proceso", "Pendiente de Revisión"] else 0)
+
+            nueva_desc = st.text_area("Descripción / Trabajo", value=str(desc_actual))
+            
+            btn_actualizar = st.form_submit_button("💾 Guardar Cambios")
+            
+            if btn_actualizar:
+                cursor.execute("""
+                    UPDATE ordenes 
+                    SET negocio_id = ?, fecha_ingreso = ?, descripcion = ?, monto_total = ?, estado = ?
+                    WHERE id = ?
+                """, (nuevo_negocio, nueva_fecha, nueva_desc, nuevo_monto, nuevo_estado, ot_seleccionada))
+                
+                conn.commit()
+                st.success(f"¡La OT {ot_seleccionada} se ha actualizado correctamente!")
+                st.rerun()
+
+conn.close()                        
