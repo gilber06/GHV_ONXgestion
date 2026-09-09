@@ -16,7 +16,7 @@ except ImportError:
 TURSO_URL = os.getenv("TURSO_DATABASE_URL")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
-def obtener_conexion():
+def get_connection():
   if TURSO_URL and TURSO_TOKEN:
     import libsql
 
