@@ -871,9 +871,9 @@ elif choice == "📅 Cobros Pendientes":
         ORDER BY p.fecha_vencimiento ASC
         """
     )
-rows = cursor.fetchall()
-column_names = [desc[0] for desc in cursor.description]
-df_p = pd.DataFrame(rows, columns=column_names)
+    rows = cursor.fetchall()
+    column_names = [desc[0] for desc in cursor.description]
+    df_p = pd.DataFrame(rows, columns=column_names)
 
   if not df_p.empty:
     clientes_con_deuda = df_p["Empresa"].unique()
