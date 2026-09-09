@@ -23,7 +23,7 @@ if hasattr(st, "secrets") and "TURSO_AUTH_TOKEN" in st.secrets:
     TURSO_TOKEN = st.secrets["TURSO_AUTH_TOKEN"]
 else:
     TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
-    
+
 def get_connection():
   if TURSO_URL and TURSO_TOKEN:
     import libsql
@@ -92,7 +92,7 @@ def inicializar_db():
                      FOREIGN KEY(negocio_id) REFERENCES negocios(id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS pagos 
                     (id INTEGER PRIMARY KEY, orden_id INTEGER, monto_cuota REAL, 
-                     fecha_vencimiento TEXT, estado_pago TEXT)""")
+                     fecha_vencimiento TEXT, estado TEXT)""")
 
     cursor.execute("PRAGMA table_info(ordenes)")
     columnas = [info[1] for info in cursor.fetchall()]
@@ -237,7 +237,7 @@ def registrar_venta_onxpert(
     if cuotas_soft == 1:
       cursor.execute(
           """
-                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado) 
                 VALUES (?, ?, ?, 'Pendiente', 'SOFTWARE / IMPLEMENTACIÓN', 0)
             """,
           (orden_id, monto_soft, fecha_manual.strftime("%Y-%m-%d")),
@@ -248,7 +248,7 @@ def registrar_venta_onxpert(
         venc_soft = fecha_manual + relativedelta(months=i)
         cursor.execute(
             """
-                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado) 
                     VALUES (?, ?, ?, 'Pendiente', ?, 0)
                 """,
             (
@@ -265,7 +265,7 @@ def registrar_venta_onxpert(
       venc_memb = fecha_manual + relativedelta(months=i)
       cursor.execute(
           """
-                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado) 
                 VALUES (?, ?, ?, 'Pendiente', ?, 0)
             """,
           (
@@ -378,12 +378,12 @@ if choice == "📊 Dashboard":
   c1, c2, c3, c4 = st.columns(4)
 
   res_pend = pd.read_sql_query(
-      "SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pendiente'", conn
+      "SELECT SUM(monto_cuota) FROM pagos WHERE estado='Pendiente'", conn
   ).iloc[0, 0]
   pend = 0 if pd.isna(res_pend) else res_pend
 
   res_coba = pd.read_sql_query(
-      "SELECT SUM(monto_cuota) FROM pagos WHERE estado_pago='Pagado'", conn
+      "SELECT SUM(monto_cuota) FROM pagos WHERE estado='Pagado'", conn
   ).iloc[0, 0]
   coba = 0 if pd.isna(res_coba) else res_coba
 
@@ -420,7 +420,7 @@ if choice == "📊 Dashboard":
   df_hist = pd.read_sql_query(
       """
         SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
-        FROM pagos WHERE estado_pago = 'Pagado' GROUP BY Mes ORDER BY Mes
+        FROM pagos WHERE estado = 'Pagado' GROUP BY Mes ORDER BY Mes
     """,
       conn,
   )
@@ -442,7 +442,7 @@ if choice == "📊 Dashboard":
   df_mes = pd.read_sql_query(
       """
         SELECT strftime('%Y-%m', fecha_vencimiento) as Mes, SUM(monto_cuota) as Total 
-        FROM pagos WHERE estado_pago = 'Pendiente' GROUP BY Mes ORDER BY Mes
+        FROM pagos WHERE estado = 'Pendiente' GROUP BY Mes ORDER BY Mes
     """,
       conn,
   )
@@ -739,7 +739,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
 
               cursor_up.execute(
                   """
-                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                 VALUES (?, ?, ?, 'Pendiente', ?, 0)
                             """,
                   (
@@ -867,7 +867,7 @@ elif choice == "🗓️ Cobros Pendientes":
         JOIN ordenes o ON p.orden_id = o.id
         JOIN clientes c ON o.cliente_id = c.id
         LEFT JOIN negocios n ON o.negocio_id = n.id
-        WHERE p.estado_pago = 'Pendiente'
+        WHERE p.estado = 'Pendiente'
         ORDER BY p.fecha_vencimiento ASC
     """,
       conn,
@@ -921,7 +921,7 @@ elif choice == "🗓️ Cobros Pendientes":
                 key=f"btn_cobrar_{empresa}_{pago_id}",
             ):
               conn.execute(
-                  "UPDATE pagos SET estado_pago = 'Pagado', sincronizado = 0 WHERE id = ?",
+                  "UPDATE pagos SET estado = 'Pagado', sincronizado = 0 WHERE id = ?",
                   (pago_id,),
               )
               conn.commit()
@@ -1002,7 +1002,7 @@ elif choice == "🗓️ Cobros Pendientes":
                   nueva_nota = f"{nota_orig_txt} (PARTE {i+1}/{int(num_partes)})"
                   cursor_div.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                         VALUES (?, ?, ?, 'Pendiente', ?, 0)
                                     """,
                       (
@@ -1344,7 +1344,7 @@ elif choice == "📝 Órdenes de Trabajo":
     ot_id = int(datos_ot["id"])
 
     df_pagos_ot = pd.read_sql_query(
-        f"SELECT id, monto_cuota, estado_pago, notas FROM pagos WHERE orden_id"
+        f"SELECT id, monto_cuota, estado, notas FROM pagos WHERE orden_id"
         f" = {ot_id}",
         conn,
     )
@@ -1424,7 +1424,7 @@ elif choice == "📝 Órdenes de Trabajo":
         )
 
         cuotas_pendientes_count = (
-            len(df_pagos_ot[df_pagos_ot["estado_pago"] == "Pendiente"])
+            len(df_pagos_ot[df_pagos_ot["estado"] == "Pendiente"])
             if not df_pagos_ot.empty
             else 1
         )
@@ -1467,7 +1467,7 @@ elif choice == "📝 Órdenes de Trabajo":
           if nueva_entrega_ot > 0:
             cursor_edit.execute(
                 """
-                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                             VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
                         """,
                 (
@@ -1482,7 +1482,7 @@ elif choice == "📝 Órdenes de Trabajo":
             if int(cant_cuotas_reajuste) == 1:
               cursor_edit.execute(
                   """
-                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                 VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
                             """,
                   (
@@ -1497,7 +1497,7 @@ elif choice == "📝 Órdenes de Trabajo":
                 vence_reajuste = datetime.now() + relativedelta(months=i)
                 cursor_edit.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                     VALUES (?, ?, ?, 'Pendiente', ?, 0)
                                 """,
                     (
@@ -1650,7 +1650,7 @@ elif choice == "✅ Historial de Cobrados":
         JOIN ordenes o ON p.orden_id = o.id 
         JOIN clientes c ON o.cliente_id = c.id
         JOIN negocios n ON o.negocio_id = n.id 
-        WHERE p.estado_pago = 'Pagado' 
+        WHERE p.estado = 'Pagado' 
         ORDER BY Fecha DESC
     """,
       conn,
@@ -1685,7 +1685,7 @@ elif choice == "✅ Historial de Cobrados":
       if st.button("🔄 Volver a Pendiente"):
         with sqlite3.connect(DB_PATH) as conn_rev:
           conn_rev.execute(
-              "UPDATE pagos SET estado_pago = 'Pendiente', sincronizado = 0 WHERE id = ?",
+              "UPDATE pagos SET estado = 'Pendiente', sincronizado = 0 WHERE id = ?",
               (int(id_pago_sel),),
           )
           conn_rev.commit()
@@ -1865,7 +1865,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
               if entrega > 0:
                 cursor_op.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                     VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
                                 """,
                     (orden_id, entrega, f_v.strftime("%Y-%m-%d")),
@@ -1876,7 +1876,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                 if tipo_v == "Contado":
                   cursor_op.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                         VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
                                     """,
                       (orden_id, saldo, f_v.strftime("%Y-%m-%d")),
@@ -1888,7 +1888,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     vence_c = f_v + relativedelta(months=i)
                     cursor_op.execute(
                         """
-                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                             VALUES (?, ?, ?, 'Pendiente', ?, 0)
                                         """,
                         (
@@ -2098,7 +2098,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
               if entrega_svc > 0:
                 cursor_op.execute(
                     """
-                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                     VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL', 0)
                                 """,
                     (orden_id, entrega_svc, f_v.strftime("%Y-%m-%d")),
@@ -2109,7 +2109,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                 if int(cant_c) == 1:
                   cursor_op.execute(
                       """
-                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                         VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO', 0)
                                     """,
                       (orden_id, saldo_restante, f_v.strftime("%Y-%m-%d")),
@@ -2120,7 +2120,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
                     vencimiento = f_v + relativedelta(months=i)
                     cursor_op.execute(
                         """
-                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado)
+                                            INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado)
                                             VALUES (?, ?, ?, 'Pendiente', ?, 0)
                                         """,
                         (
@@ -2307,13 +2307,13 @@ elif choice == "📈 Reportes Avanzados":
                     SELECT SUM(p.monto_cuota) 
                     FROM pagos p 
                     JOIN ordenes o2 ON p.orden_id = o2.id 
-                    WHERE o2.cliente_id = c.id AND p.estado_pago = 'Pagado'
+                    WHERE o2.cliente_id = c.id AND p.estado = 'Pagado'
                 ), 0) as Total_Pagado,
                 COALESCE((
                     SELECT SUM(p.monto_cuota) 
                     FROM pagos p 
                     JOIN ordenes o2 ON p.orden_id = o2.id 
-                    WHERE o2.cliente_id = c.id AND p.estado_pago = 'Pendiente'
+                    WHERE o2.cliente_id = c.id AND p.estado = 'Pendiente'
                 ), 0) as Saldo_Pendiente
             FROM clientes c
             JOIN ordenes o ON c.id = o.cliente_id
