@@ -876,7 +876,7 @@ elif choice == "📅 Cobros Pendientes":
     df_p = pd.DataFrame(rows, columns=column_names)
 
     if not df_p.empty:
-    clientes_con_deuda = df_p["Empresa"].unique()
+        clientes_con_deuda = df_p["Empresa"].unique()
 
     for empresa in clientes_con_deuda:
       pagos_cliente = df_p[df_p["Empresa"] == empresa]
