@@ -13,9 +13,17 @@ try:
 except ImportError:
     pass
 
-TURSO_URL = os.getenv("TURSO_DATABASE_URL")
-TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
+# Cargar secretos de Streamlit Cloud si están disponibles
+if hasattr(st, "secrets") and "TURSO_DATABASE_URL" in st.secrets:
+    TURSO_URL = st.secrets["TURSO_DATABASE_URL"]
+else:
+    TURSO_URL = os.getenv("TURSO_DATABASE_URL")
 
+if hasattr(st, "secrets") and "TURSO_AUTH_TOKEN" in st.secrets:
+    TURSO_TOKEN = st.secrets["TURSO_AUTH_TOKEN"]
+else:
+    TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
+    
 def get_connection():
   if TURSO_URL and TURSO_TOKEN:
     import libsql
