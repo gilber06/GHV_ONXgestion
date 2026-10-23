@@ -375,7 +375,7 @@ if choice == "📊 Dashboard":
         title="Dinero Cobrado por Mes",
         color_discrete_sequence=["#2ecc71"],
     )
-    st.plotly_chart(fig_h, use_container_width=True)
+    st.plotly_chart(fig_h, width="stretch")
   else:
     st.info(
         "Aún no hay cobros marcados como 'Pagado' para mostrar en el historial."
@@ -397,7 +397,7 @@ if choice == "📊 Dashboard":
         title="Flujo de Caja Pendiente",
         markers=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # ==========================================
 # 5. VISTA: RECEPCIÓN DE EQUIPOS (TALLER)
@@ -566,7 +566,7 @@ elif choice == "🛠️ Recepción de Equipos (Taller)":
           )
       )
       st.dataframe(
-          df_taller_display, use_container_width=True, hide_index=True
+          df_taller_display, width="stretch", hide_index=True
       )
 
       st.markdown("---")
@@ -842,7 +842,7 @@ elif choice == "🗓️ Cobros Pendientes":
             .style.apply(resaltar_vencidos, axis=1)
             .format({"Monto": lambda x: f"{int(x):,} Gs.".replace(",", ".")})
         )
-        st.dataframe(df_estilado, use_container_width=True, hide_index=True)
+        st.dataframe(df_estilado, width="stretch", hide_index=True)
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1090,7 +1090,7 @@ elif choice == "👥 Gestión de Clientes":
     df_clientes = df_clientes.drop_duplicates(subset=["id"]).reset_index(
         drop=True
     )
-    st.dataframe(df_clientes, use_container_width=True)
+    st.dataframe(df_clientes, width="stretch")
 
     st.markdown("---")
     st.subheader("📝 Editar Datos de Cliente")
@@ -1215,7 +1215,7 @@ elif choice == "📝 Órdenes de Trabajo":
   if not df_ot.empty:
     st.dataframe(
         df_ot.drop(columns=["Tel"]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         key="tabla_ots_activa",
     )
@@ -1580,7 +1580,7 @@ elif choice == "✅ Historial de Cobrados":
     df_display["Cobrado"] = df_display["Cobrado"].apply(
         lambda x: f"{int(x):,} Gs.".replace(",", ".")
     )
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    st.dataframe(df_display, width="stretch", hide_index=True)
 
     st.markdown("---")
     st.subheader("↩️ Deshacer Cobro Realizado por Error")
@@ -1898,7 +1898,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
             "Cantidad", min_value=1, value=1, key="p_insumo_cant"
         )
 
-        if col_btn_p.button("➕ Añadir Insumo", use_container_width=True):
+        if col_btn_p.button("➕ Añadir Insumo", width="stretch"):
           match_p = df_prod_disponibles[
               df_prod_disponibles["display"] == p_elegido_display
           ].iloc[0]
@@ -1959,10 +1959,10 @@ elif choice == "🛒 Nueva Venta / Servicio":
       col_sub1, col_sub2 = st.columns(2)
       with col_sub1:
         enviar_svc = st.button(
-            "🚀 Registrar Servicio Técnico Completo", use_container_width=True
+            "🚀 Registrar Servicio Técnico Completo", width="stretch"
         )
       with col_sub2:
-        if st.button("❌ Limpiar Todo", use_container_width=True):
+        if st.button("❌ Limpiar Todo", width="stretch"):
           st.session_state.insumos_orden = []
           st.rerun()
 
@@ -2120,7 +2120,7 @@ elif choice == "🛒 Nueva Venta / Servicio":
       )
 
       if st.button(
-          "🚀 Registrar Software y Membresía", use_container_width=True
+          "🚀 Registrar Software y Membresía", width="stretch"
       ):
         if not soft:
           st.error("⚠️ Por favor ingresa el nombre o descripción del sistema.")
@@ -2195,7 +2195,7 @@ elif choice == "📈 Reportes Avanzados":
             hole=0.4,
             color_discrete_sequence=["#3498db", "#e67e22"],
         )
-        st.plotly_chart(fig_rent, use_container_width=True)
+        st.plotly_chart(fig_rent, width="stretch")
       else:
         st.warning("La utilidad total es 0 o negativa para graficar.")
 
@@ -2251,14 +2251,14 @@ elif choice == "📈 Reportes Avanzados":
               "Saldo_Pendiente": "#e74c3c",
           },
       )
-      st.plotly_chart(fig_bar, use_container_width=True)
+      st.plotly_chart(fig_bar, width="stretch")
 
       df_comp_fmt = df_comp.copy()
       for col in ["Volumen_Contratado", "Total_Pagado", "Saldo_Pendiente"]:
         df_comp_fmt[col] = df_comp_fmt[col].apply(
             lambda x: f"{int(x):,}".replace(",", ".")
         )
-      st.dataframe(df_comp_fmt, use_container_width=True)
+      st.dataframe(df_comp_fmt, width="stretch")
 
 # ==========================================
 # 14. VISTA: INVENTARIO / STOCK
@@ -2364,7 +2364,7 @@ elif choice == "📦 Inventario / Stock":
       df_stock_fmt = df_stock_fmt.rename(
           columns={"Precio_Costo": "Costo (Gs)", "Precio_Venta": "P. Venta (Gs)"}
       )
-      st.dataframe(df_stock_fmt, use_container_width=True, hide_index=True)
+      st.dataframe(df_stock_fmt, width="stretch", hide_index=True)
 
       st.markdown("---")
       st.subheader("📝 Editar Cualquier Dato de un Producto")

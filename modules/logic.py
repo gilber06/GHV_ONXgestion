@@ -63,7 +63,7 @@ def registrar_venta_completa(
 
             for idx, fecha in enumerate(fechas_software, 1):
                 cursor.execute(
-                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado) 
                        VALUES (?, ?, ?, 'Pendiente', ?, 0)""",
                     (
                         orden_id,
@@ -82,7 +82,7 @@ def registrar_venta_completa(
                 estado = "Pagado" if i == 0 else "Pendiente"
                 
                 cursor.execute(
-                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado_pago, notas, sincronizado) 
+                    """INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas, sincronizado) 
                        VALUES (?, ?, ?, ?, ?, 0)""",
                     (
                         orden_id,
@@ -120,3 +120,6 @@ if __name__ == "__main__":
         monto_membresia=150000,
         cuotas_membresia=10,
     )
+```[cite: 12]
+
+Puedes enviarme el siguiente archivo cuando estés listo para continuar con la revisión.

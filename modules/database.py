@@ -30,6 +30,7 @@ def get_connection():
     Retorna una conexión a la base de datos de forma inteligente:
     - Prioriza st.secrets (para Streamlit Cloud en la web).
     - Luego busca en variables de entorno / .env (para tu PC local).
+    - Si encuentra credenciales de Turso, utiliza libsql con réplica local.
     - Si no encuentra nada, utiliza el archivo SQLite local de respaldo.
     """
     turso_url = None
@@ -48,10 +49,25 @@ def get_connection():
         turso_url = os.environ.get("TURSO_DATABASE_URL")
         turso_token = os.environ.get("TURSO_AUTH_TOKEN")
 
+    if not os.path.exists(DB_PATH.parent):
+        os.makedirs(DB_PATH.parent, exist_ok=True)
+
     if turso_url and turso_token and LIBSQL_DISPONIBLE:
-        return libsql.connect(database=turso_url, auth_token=turso_token)
+        try:
+            conn = libsql.connect(
+                database=str(DB_PATH),
+                sync_url=turso_url,
+                auth_token=turso_token
+            )
+            try:
+                conn.sync()
+            except Exception as sync_err:
+                print(f"Advertencia de sincronización con Turso: {sync_err}")
+            return conn
+        except Exception as e:
+            print(f"Error conectando a Turso, usando SQLite local: {e}")
+            return sqlite3.connect(DB_PATH)
     else:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         return sqlite3.connect(DB_PATH)
 
 
@@ -104,7 +120,7 @@ def inicializar_bd():
             orden_id INTEGER, 
             monto_cuota REAL, 
             fecha_vencimiento DATE, 
-            estado_pago TEXT,
+            estado TEXT,
             notas TEXT,
             sincronizado INTEGER DEFAULT 0,
             FOREIGN KEY(orden_id) REFERENCES ordenes(id)

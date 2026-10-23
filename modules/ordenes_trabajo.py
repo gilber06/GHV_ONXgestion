@@ -1,16 +1,17 @@
-from datetime import datetime
 import os
-from pathlib import Path
+import streamlit as st
+import pandas as pd
 import sqlite3
+import time
 import urllib.parse
+from datetime import datetime
+from pathlib import Path
+from dateutil.relativedelta import relativedelta
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-import streamlit as st
-from database import get_connection
-from sincronizador import ejecutar_sincronizacion_completa
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, Image
 
 # Determinación inteligente de rutas para assets/ y output/
 RUTA_ACTUAL = Path(__file__).resolve()
@@ -20,7 +21,6 @@ BASE_DIR = (
     else RUTA_ACTUAL.parent
 )
 OUTPUT_DIR = BASE_DIR / "output"
-
 
 def generar_pdf_ot(ot, filename="orden_trabajo.pdf"):
     """Genera el comprobante físico de recepción de taller en PDF."""
@@ -110,31 +110,37 @@ def generar_pdf_ot(ot, filename="orden_trabajo.pdf"):
     doc.build(story)
     return ruta_salida
 
+def render(get_connection):
+    st.title("📝 Órdenes de Trabajo y Taller")
+    
+    tab_rec, tab_taller, tab_gestion, tab_papelera = st.tabs([
+        "📥 Nueva Recepción (PDF)", 
+        "📋 Equipos en Taller", 
+        "🛠️ Gestión Financiera y Reajuste", 
+        "♻️ Papelera"
+    ])
 
-def render():
-    st.header("📝 Recepción de Equipos y Órdenes de Trabajo")
-    st.caption("Registrá el ingreso de equipos al taller, generá comprobantes de recepción y hacé seguimiento directo en la base de datos.")
-    st.markdown("---")
-
-    # Asegurar conexión y obtener clientes existentes para el selector
-    try:
-        with get_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            # Obtener lista de clientes para asociar la OT
-            clientes_db = cursor.execute("SELECT id, nombre, telefono FROM clientes ORDER BY nombre").fetchall()
-    except Exception as e:
-        st.error(f"❌ Error al conectar con la base de datos: {e}")
-        return
-
-    col_form, col_lista = st.columns([1, 1], gap="medium")
-
-    with col_form:
-        st.subheader("📌 Nueva Orden de Trabajo")
+    # ==========================================
+    # PESTAÑA 1: NUEVA RECEPCIÓN Y PDF
+    # ==========================================
+    with tab_rec:
+        st.subheader("Registrar Ingreso de Equipo al Taller")
         
-        with st.form("form_nueva_ot", clear_on_submit=True):
-            # Selección de cliente existente o ingreso rápido
+        try:
+            with get_connection() as conn_c:
+                conn_c.row_factory = sqlite3.Row
+                clientes_db = conn_c.execute("""
+                    SELECT MIN(id) as id, nombre, MAX(telefono) as telefono 
+                    FROM clientes 
+                    WHERE nombre IS NOT NULL AND nombre != '' 
+                    GROUP BY nombre 
+                    ORDER BY nombre ASC
+                """).fetchall()
+        except Exception as e:
+            st.error(f"❌ Error al cargar clientes: {e}")
+            clientes_db = []
+
+        with st.form("form_nueva_ot_taller", clear_on_submit=True):
             nombres_clientes = [c["nombre"] for c in clientes_db] if clientes_db else []
             nombres_clientes.insert(0, "-- Otro / Cliente Nuevo --")
             
@@ -164,7 +170,7 @@ def render():
             ot_accesorios = st.text_input("Accesorios Incluidos (ej: Cargador, Mochila)")
             ot_falla = st.text_area("Falla Reportada / Diagnóstico Inicial")
 
-            submitted = st.form_submit_button("📥 Registrar Orden en Base de Datos", use_container_width=True)
+            submitted = st.form_submit_button("📥 Registrar Orden y Generar PDF", use_container_width=True)
 
             if submitted:
                 if not ot_cliente or not ot_falla or not ot_marca:
@@ -173,25 +179,23 @@ def render():
                     try:
                         with get_connection() as conn_ins:
                             cur = conn_ins.cursor()
-                            
-                            # 1. Asegurar que el cliente exista en la tabla clientes y obtener ID
                             cur.execute("SELECT id FROM clientes WHERE nombre = ?", (ot_cliente,))
                             res_cli = cur.fetchone()
                             if res_cli:
                                 cliente_id = res_cli[0]
                             else:
-                                cur.execute("INSERT INTO clientes (nombre, telefono, sincronizado) VALUES (?, ?, 0)", (ot_cliente, ot_telefono))
+                                cur.execute("INSERT INTO clientes (nombre, telefono, activo) VALUES (?, ?, 1)", (ot_cliente, ot_telefono))
                                 if hasattr(cur, "lastrowid") and cur.lastrowid:
                                     cliente_id = cur.lastrowid
                                 else:
                                     cur.execute("SELECT MAX(id) FROM clientes")
                                     cliente_id = cur.fetchone()[0]
 
-                            # 2. Insertar en ordenes_trabajo
+                            # 1. Insertar en la tabla de taller (ordenes_trabajo)[cite: 13]
                             cur.execute("""
                                 INSERT INTO ordenes_trabajo 
-                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, monto_presupuesto, estado, sincronizado)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendiente de Revisión', 0)
+                                (id_cliente, tipo_equipo, marca_modelo, numero_serie, accesorios, falla_reportada, monto_presupuesto, estado)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendiente de Revisión')
                             """, (cliente_id, ot_tipo, ot_marca, ot_serie, ot_accesorios, ot_falla, ot_presupuesto))
                             
                             if hasattr(cur, "lastrowid") and cur.lastrowid:
@@ -199,13 +203,38 @@ def render():
                             else:
                                 cur.execute("SELECT MAX(id_orden) FROM ordenes_trabajo")
                                 nuevo_id_ot = cur.fetchone()[0]
+
+                            # 2. AUTOMATIZACIÓN FINANCIERA: Insertar en la tabla comercial 'ordenes'[cite: 13]
+                            detalle_financiero = f"{ot_tipo} - {ot_marca} (Falla: {ot_falla})"
+                            
+                            try:
+                                cur.execute("SELECT id FROM negocios LIMIT 1")
+                                neg_res = cur.fetchone()
+                                negocio_id = neg_res[0] if neg_res else 1
+                            except Exception:
+                                negocio_id = 1
+
+                            cur.execute("""
+                                INSERT INTO ordenes (cliente_id, descripcion, monto_total, costo_insumos, estado, negocio_id)
+                                VALUES (?, ?, ?, 0, 'Pendiente', ?)
+                            """, (cliente_id, detalle_financiero.upper(), ot_presupuesto, negocio_id))
+                            
+                            if hasattr(cur, "lastrowid") and cur.lastrowid:
+                                id_orden_financiera = cur.lastrowid
+                            else:
+                                cur.execute("SELECT MAX(id) FROM ordenes")
+                                id_orden_financiera = cur.fetchone()[0]
+
+                            # 3. Crear automáticamente el pago pendiente inicial en la tabla 'pagos'[cite: 13]
+                            if ot_presupuesto > 0:
+                                cur.execute("""
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas)
+                                    VALUES (?, ?, ?, 'Pendiente', 'SALDO PENDIENTE OT')
+                                """, (id_orden_financiera, ot_presupuesto, datetime.now().strftime("%Y-%m-%d")))
                                 
                             conn_ins.commit()
-                            ejecutar_sincronizacion_completa()
 
                         num_ot_str = f"OT-{nuevo_id_ot:03d}"
-                        
-                        # Preparar diccionario para el PDF
                         datos_ot_pdf = {
                             "numero": num_ot_str,
                             "fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -223,13 +252,12 @@ def render():
                         st.session_state.ot_pdf_path = str(ruta_pdf)
                         st.session_state.ot_actual_num = num_ot_str
 
-                        st.success(f"¡Orden #{num_ot_str} registrada con éxito en la base de datos!")
+                        st.success(f"¡Orden #{num_ot_str} registrada y vinculada a finanzas con éxito!")
                         st.rerun()
 
                     except Exception as e:
-                        st.error(f"❌ Error al guardar en la base de datos: {e}")
+                        st.error(f"❌ Error al guardar: {e}")
 
-        # Sección de descarga del último comprobante generado
         if st.session_state.get("ot_pdf_ready") and os.path.exists(st.session_state.get("ot_pdf_path", "")):
             st.markdown("---")
             st.markdown(f"#### Comprobante listo: **{st.session_state.ot_actual_num}**")
@@ -242,14 +270,15 @@ def render():
                     use_container_width=True
                 )
 
-    with col_lista:
-        st.subheader("📋 Equipos en Taller (Base de Datos)")
-
+    # ==========================================
+    # PESTAÑA 2: EQUIPOS EN TALLER
+    # ==========================================
+    with tab_taller:
+        st.subheader("Seguimiento de Equipos en Taller")
         try:
             with get_connection() as conn_read:
                 conn_read.row_factory = sqlite3.Row
                 cursor_read = conn_read.cursor()
-                
                 query_ots = """
                     SELECT ot.*, c.nombre AS cliente_nombre, c.telefono AS cliente_tel
                     FROM ordenes_trabajo ot
@@ -262,7 +291,7 @@ def render():
             ots_registradas = []
 
         if not ots_registradas:
-            st.info("Aún no hay órdenes de trabajo registradas en la base de datos.")
+            st.info("Aún no hay órdenes de trabajo en taller.")
         else:
             for ot in ots_registradas:
                 ot_num = f"OT-{ot['id_orden']:03d}"
@@ -279,7 +308,6 @@ def render():
                         'Listo para Retiro', 
                         'Entregado'
                     ]
-                    
                     estado_actual = ot["estado"] if ot["estado"] in estados_posibles else 'Pendiente de Revisión'
                     
                     nuevo_estado = st.selectbox(
@@ -293,95 +321,186 @@ def render():
                         try:
                             with get_connection() as conn_upd:
                                 conn_upd.execute(
-                                    "UPDATE ordenes_trabajo SET estado = ?, fecha_modificacion = CURRENT_TIMESTAMP, sincronizado = 0 WHERE id_orden = ?",
+                                    "UPDATE ordenes_trabajo SET estado = ?, fecha_modificacion = CURRENT_TIMESTAMP WHERE id_orden = ?",
                                     (nuevo_estado, ot['id_orden'])
                                 )
                                 conn_upd.commit()
-                                ejecutar_sincronizacion_completa()
                             st.toast(f"Orden {ot_num} actualizada a '{nuevo_estado}'", icon="🔄")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error al actualizar estado: {e}")
 
-                    # Botón de notificación por WhatsApp
                     tel_cliente = ot["cliente_tel"]
                     if tel_cliente:
                         clean_p = "".join(filter(str.isdigit, str(tel_cliente)))
                         nombre_empresa = st.session_state.get("config_negocio", {}).get("nombre", "GHV Service")
-                        
                         if nuevo_estado == "Listo para Retiro":
                             txt_wa = f"Hola {ot['cliente_nombre']}, ¡excelentes noticias! Tu equipo ({ot['tipo_equipo']}) bajo la orden {ot_num} ya está LISTO PARA RETIRAR en {nombre_empresa}."
                         else:
                             txt_wa = f"Hola {ot['cliente_nombre']}, te actualizamos sobre la orden {ot_num}: El estado actual de tu equipo es '{nuevo_estado}'."
                         
                         wa_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(txt_wa)}"
-                        st.link_button(f"📲 Avisar por WhatsApp ({nuevo_estado})", wa_url, use_container_width=True)
+                        st.link_button(f"📲 Avisar por WhatsApp ({nuevo_estado})", wa_url)
 
-st.markdown("---")
-st.subheader("✏️ Modificación Rápida de Órdenes de Trabajo")
-
-# Obtenemos la conexión usando tu función centralizada de database.py
-conn = get_connection()
-cursor = conn.cursor()
-
-# Consultamos las órdenes existentes para listarlas en el selectbox
-cursor.execute("""
-    SELECT o.id, n.nombre, c.nombre, o.descripcion, o.fecha_ingreso, o.monto_total 
-    FROM ordenes o
-    LEFT JOIN negocios n ON o.negocio_id = n.id
-    LEFT JOIN clientes c ON o.cliente_id = c.id
-    ORDER BY o.id DESC
-""")
-lista_ots = cursor.fetchall()
-
-if lista_ots:
-    # Creamos un diccionario para mostrar una etiqueta descriptiva en el selectbox (ej: "OT 60 - JORGE CANTUNI")
-    opciones_ots = {row[0]: f"OT {row[0]} | {row[1]} | {row[2]} - {row[3][:30]}..." for row in lista_ots}
-    
-    ot_seleccionada = st.selectbox(
-        "Seleccione la OT que desea modificar:",
-        options=list(opciones_ots.keys()),
-        format_func=lambda x: opciones_ots[x]
-    )
-    
-    # Buscamos los datos actuales de la OT elegida
-    cursor.execute("SELECT negocio_id, fecha_ingreso, descripcion, monto_total, estado FROM ordenes WHERE id = ?", (ot_seleccionada,))
-    datos_actuales = cursor.fetchone()
-    
-    if datos_actuales:
-        neg_actual, fecha_actual, desc_actual, monto_actual, estado_actual = datos_actuales
+    # ==========================================
+    # PESTAÑA 3: GESTIÓN FINANCIERA Y REAJUSTE
+    # ==========================================
+    with tab_gestion:
+        st.subheader("Gestión Comercial y Reajuste de Saldos (Tabla Órdenes)")
         
-        with st.form(f"form_editar_ot_{ot_seleccionada}"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Selector de Negocio (1: GHV Service, 2: OnXpert Software)
-                nuevo_negocio = st.selectbox(
-                    "Negocio",
-                    options=[1, 2],
-                    format_func=lambda x: "GHV Service" if x == 1 else "OnXpert Software",
-                    index=0 if neg_actual == 1 else 1
+        with get_connection() as conn_g:
+            df_ot_edit = pd.read_sql_query(
+                """
+                SELECT o.id, 
+                       COALESCE(NULLIF(c.apodo, ''), c.nombre) as Empresa, 
+                       o.descripcion, 
+                       o.monto_total, 
+                       o.costo_insumos, 
+                       o.estado 
+                FROM ordenes o 
+                JOIN clientes c ON o.cliente_id = c.id
+                ORDER BY o.id DESC
+            """,
+                conn_g,
+            )
+
+        if not df_ot_edit.empty:
+            ot_opciones = {
+                f"OT {row['id']} - {row['Empresa']}": row
+                for _, row in df_ot_edit.iterrows()
+            }
+            ot_seleccionada = st.selectbox(
+                "Seleccione la OT para modificar:", options=list(ot_opciones.keys())
+            )
+
+            datos_ot = ot_opciones[ot_seleccionada]
+            ot_id = int(datos_ot["id"])
+
+            with get_connection() as conn_pagos:
+                df_pagos_ot = pd.read_sql_query(
+                    f"SELECT id, monto_cuota, estado, notas FROM pagos WHERE orden_id = {ot_id}",
+                    conn_pagos,
                 )
-                
-                nueva_fecha = st.text_input("Fecha de Ingreso (YYYY-MM-DD)", value=str(fecha_actual))
-                
-            with col2:
-                nuevo_monto = st.number_input("Monto Total (Gs.)", value=float(monto_actual), step=1000.0)
-                nuevo_estado = st.selectbox("Estado", options=["Venta", "En Proceso", "Pendiente de Revisión"], index=["Venta", "En Proceso", "Pendiente de Revisión"].index(estado_actual) if estado_actual in ["Venta", "En Proceso", "Pendiente de Revisión"] else 0)
 
-            nueva_desc = st.text_area("Descripción / Trabajo", value=str(desc_actual))
-            
-            btn_actualizar = st.form_submit_button("💾 Guardar Cambios")
-            
-            if btn_actualizar:
-                cursor.execute("""
-                    UPDATE ordenes 
-                    SET negocio_id = ?, fecha_ingreso = ?, descripcion = ?, monto_total = ?, estado = ?
-                    WHERE id = ?
-                """, (nuevo_negocio, nueva_fecha, nueva_desc, nuevo_monto, nuevo_estado, ot_seleccionada))
-                
-                conn.commit()
-                st.success(f"¡La OT {ot_seleccionada} se ha actualizado correctamente!")
-                st.rerun()
+            entrega_actual_val = 0
+            if not df_pagos_ot.empty:
+                entrega_actual_val = df_pagos_ot[
+                    df_pagos_ot["notas"].fillna("") == "ENTREGA INICIAL"
+                ]["monto_cuota"].sum()
 
-conn.close()                        
+            monto_tot_def = int(datos_ot["monto_total"]) if pd.notna(datos_ot["monto_total"]) else 0
+            costo_ins_def = int(datos_ot["costo_insumos"]) if pd.notna(datos_ot["costo_insumos"]) else 0
+            desc_ot_def = str(datos_ot["descripcion"]) if pd.notna(datos_ot["descripcion"]) else ""
+
+            with st.form("form_edicion_completa_ot"):
+                col_ot1, col_ot2 = st.columns(2)
+                estados_permitidos = ["Pendiente", "En Proceso", "Finalizada", "Cancelada", "Entregado", "Venta"]
+                estado_actual = datos_ot["estado"]
+                indice_default = estados_permitidos.index(estado_actual) if estado_actual in estados_permitidos else 0
+
+                with col_ot1:
+                    nuevo_monto = st.number_input("Monto Total:", value=monto_tot_def, step=50000)
+                    st.info(f"Confirmar total: **{int(nuevo_monto):,} Gs.**".replace(",", "."))
+
+                    nueva_entrega_ot = st.number_input("Entrega Inicial:", value=int(entrega_actual_val), step=50000)
+                    st.info(f"Confirmar entrega: **{int(nueva_entrega_ot):,} Gs.**".replace(",", "."))
+
+                    nuevo_estado = st.selectbox("Estado del Trabajo:", options=estados_permitidos, index=indice_default)
+
+                with col_ot2:
+                    nuevo_costo = st.number_input("Costo de Insumos / Repuestos:", value=costo_ins_def, step=10000)
+                    st.info(f"Costo: **{int(nuevo_costo):,} Gs.**".replace(",", "."))
+                    nueva_desc = st.text_area("Descripción detallada:", value=desc_ot_def)
+
+                    cuotas_pendientes_count = len(df_pagos_ot[df_pagos_ot["estado"] == "Pendiente"]) if not df_pagos_ot.empty else 1
+                    cant_cuotas_reajuste = st.number_input("Cantidad de Cuotas Restantes", min_value=1, value=max(cuotas_pendientes_count, 1))
+
+                boton_guardar = st.form_submit_button("💾 Guardar Cambios y Reajustar Saldos")
+
+            if boton_guardar:
+                try:
+                    with get_connection() as conn_edit:
+                        cursor_edit = conn_edit.cursor()
+                        cursor_edit.execute(
+                            """
+                            UPDATE ordenes 
+                            SET monto_total = ?, costo_insumos = ?, descripcion = ?, estado = ? 
+                            WHERE id = ?
+                        """,
+                            (int(nuevo_monto), int(nuevo_costo), nueva_desc.upper(), nuevo_estado, ot_id),
+                        )
+
+                        cursor_edit.execute("DELETE FROM pagos WHERE orden_id = ?", (ot_id,))
+
+                        if nueva_entrega_ot > 0:
+                            cursor_edit.execute(
+                                """
+                                INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas)
+                                VALUES (?, ?, ?, 'Pagado', 'ENTREGA INICIAL')
+                            """,
+                                (ot_id, nueva_entrega_ot, datetime.now().strftime("%Y-%m-%d")),
+                            )
+
+                        saldo_restante_ot = nuevo_monto - nueva_entrega_ot
+                        if saldo_restante_ot > 0:
+                            if int(cant_cuotas_reajuste) == 1:
+                                cursor_edit.execute(
+                                    """
+                                    INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas)
+                                    VALUES (?, ?, ?, 'Pendiente', 'SALDO CONTADO')
+                                """,
+                                    (ot_id, saldo_restante_ot, datetime.now().strftime("%Y-%m-%d")),
+                                )
+                            else:
+                                monto_por_cuota_ot = saldo_restante_ot / cant_cuotas_reajuste
+                                for i in range(1, int(cant_cuotas_reajuste) + 1):
+                                    vence_reajuste = datetime.now() + relativedelta(months=i)
+                                    cursor_edit.execute(
+                                        """
+                                        INSERT INTO pagos (orden_id, monto_cuota, fecha_vencimiento, estado, notas)
+                                        VALUES (?, ?, ?, 'Pendiente', ?)
+                                    """,
+                                        (ot_id, monto_por_cuota_ot, vence_reajuste.strftime("%Y-%m-%d"), f"CUOTA {i}/{cant_cuotas_reajuste}"),
+                                    )
+                        conn_edit.commit()
+
+                    st.success(f"✅ ¡OT {ot_id} reajustada y actualizada correctamente!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al guardar: {e}")
+        else:
+            st.info("No hay órdenes financieras registradas.")
+
+    # ==========================================
+    # PESTAÑA 4: PAPELERA
+    # ==========================================
+    with tab_papelera:
+        st.subheader("♻️ Papelera de Reciclaje e Historial")
+        with get_connection() as conn_p:
+            df_borrados = pd.read_sql_query("SELECT * FROM historial_eliminacion ORDER BY fecha_eliminacion DESC", conn_p)
+
+        if not df_borrados.empty:
+            st.dataframe(df_borrados, use_container_width=True)
+            ultima = df_borrados.iloc[0]
+
+            if st.button(f"↩️ Deshacer: Recuperar OT {int(ultima['orden_id'])}"):
+                try:
+                    with get_connection() as conn_undo:
+                        conn_undo.execute(
+                            """
+                            INSERT INTO ordenes (id, monto_total, descripcion, estado, cliente_id, negocio_id)
+                            VALUES (?, ?, ?, 'Pendiente', 
+                                (SELECT id FROM clientes WHERE apodo = ? OR nombre = ? LIMIT 1), 
+                                (SELECT id FROM negocios LIMIT 1))
+                        """,
+                            (int(ultima["orden_id"]), ultima["monto"], ultima["detalle"], ultima["cliente"], ultima["cliente"]),
+                        )
+                        conn_undo.execute("DELETE FROM historial_eliminacion WHERE id = ?", (int(ultima["id"]),))
+                        conn_undo.commit()
+                    st.success("Orden recuperada correctamente.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al recuperar: {e}")
+        else:
+            st.info("La papelera está vacía.")

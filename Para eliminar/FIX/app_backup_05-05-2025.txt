@@ -227,7 +227,7 @@ if choice == "📊 Dashboard":
     """, conn)
     if not df_hist.empty:
         fig_h = px.bar(df_hist, x='Mes', y='Total', title="Dinero Cobrado por Mes", color_discrete_sequence=['#2ecc71'])
-        st.plotly_chart(fig_h, use_container_width=True)
+        st.plotly_chart(fig_h, width="stretch")
     else:
         st.info("Aún no hay cobros marcados como 'Pagado' para mostrar en el historial.")
 
@@ -238,7 +238,7 @@ if choice == "📊 Dashboard":
     """, conn)
     if not df_mes.empty:
         fig = px.line(df_mes, x='Mes', y='Total', title="Flujo de Caja Pendiente", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 elif choice == "🗓️ Cobros Pendientes":
     st.title("Control de Cobros")
@@ -287,7 +287,7 @@ elif choice == "🗓️ Cobros Pendientes":
                 df_estilado = pagos_cliente[['ID', 'Vence', 'Monto', 'Detalle', 'Notas']].style.apply(resaltar_vencidos, axis=1)
                 
                 # Mostramos la tabla con el estilo aplicado
-                st.dataframe(df_estilado, use_container_width=True, hide_index=True)
+                st.dataframe(df_estilado, width="stretch", hide_index=True)
                 # -----------------------------
                 
                 # Botón rápido para cobrar dentro del expander
@@ -429,7 +429,7 @@ elif choice == "👥 Gestión de Clientes":
     with tab2:
         st.subheader("Base de Datos Actual")
         df_clientes = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono, ruc_ci FROM clientes WHERE activo = 1", conn)
-        st.dataframe(df_clientes, use_container_width=True)
+        st.dataframe(df_clientes, width="stretch")
         
         # Traemos solo los activos para la tabla principal
         df_clientes = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono, ruc_ci FROM clientes WHERE activo = 1", conn)
@@ -442,7 +442,7 @@ elif choice == "👥 Gestión de Clientes":
                 df_clientes['Empresa'].str.contains(busqueda, case=False, na=False)
             ]
         
-        st.dataframe(df_clientes, use_container_width=True)
+        st.dataframe(df_clientes, width="stretch")
 
 #Boton de Edición clientes
         st.markdown("---")
@@ -509,7 +509,7 @@ elif choice == "📝 Órdenes de Trabajo":
     """, conn)
     
     if not df_ot.empty:
-        st.dataframe(df_ot.drop(columns=['Tel']), use_container_width=True, hide_index=True, key="tabla_ots_activa")
+        st.dataframe(df_ot.drop(columns=['Tel']), width="stretch", hide_index=True, key="tabla_ots_activa")
         ot_sel = st.selectbox("Seleccione OT:", df_ot['OT'])
         if st.button("Generar Mensaje de OT"):
             r = df_ot[df_ot['OT'] == ot_sel].iloc[0]
@@ -692,7 +692,7 @@ elif choice == "✅ Historial de Cobrados":
         JOIN negocios n ON o.negocio_id = n.id WHERE p.estado_pago = 'Pagado' ORDER BY Fecha DESC
     """, conn)
     if not df_h.empty:
-        st.dataframe(df_h, use_container_width=True, hide_index=True)
+        st.dataframe(df_h, width="stretch", hide_index=True)
     else:
         st.info("El historial está vacío. Los pagos aparecerán aquí una vez que los confirmes en 'Cobros Pendientes'.")
 
@@ -831,7 +831,7 @@ elif choice == "📈 Reportes Avanzados":
                 fig_rent = px.pie(df_rent, values='Utilidad_Neta', names='Negocio', 
                                  title="Distribución de Utilidad Neta",
                                  color_discrete_sequence=['#3498db', '#e67e22'])
-                st.plotly_chart(fig_rent, use_container_width=True)
+                st.plotly_chart(fig_rent, width="stretch")
         else:
             st.info("No hay datos suficientes para calcular rentabilidad.")
 
@@ -854,6 +854,6 @@ elif choice == "📈 Reportes Avanzados":
                             title="Top 10 Clientes que más facturan",
                             text_auto='.2s', color='Total_Invertido',
                             color_continuous_scale='Viridis')
-            st.plotly_chart(fig_top, use_container_width=True)
+            st.plotly_chart(fig_top, width="stretch")
         else:
             st.info("Aún no hay registros de ventas para rankear clientes.")

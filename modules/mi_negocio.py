@@ -2,7 +2,6 @@ from pathlib import Path
 from PIL import Image
 import streamlit as st
 
-# Determinación inteligente de rutas para mantener consistencia con los demás módulos
 RUTA_ACTUAL = Path(__file__).resolve()
 BASE_DIR = (
     RUTA_ACTUAL.parent.parent
@@ -17,7 +16,6 @@ def render():
     st.caption("Personalizá los datos y el logotipo que figurarán en los PDF de presupuestos y órdenes.")
     st.markdown("---")
 
-    # Asegurar inicialización segura del session_state si no existe
     if "config_negocio" not in st.session_state:
         st.session_state.config_negocio = {
             "nombre": "GHV - Service",
@@ -47,7 +45,6 @@ def render():
     with col2:
         st.subheader("Imagen del Logo & Textos de PDF")
         
-        # Asegurar que la carpeta assets/ exista
         ASSETS_DIR.mkdir(parents=True, exist_ok=True)
         logo_path_default = ASSETS_DIR / "logo_empresa.png"
         
@@ -60,7 +57,6 @@ def render():
             try:
                 img = Image.open(logo_file)
                 
-                # Preservar canal alfa o convertir a RGB estándar
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGBA")
                 else:
@@ -72,7 +68,6 @@ def render():
             except Exception as e:
                 st.error(f"❌ Error al procesar la imagen: {e}")
 
-        # Mostrar preview si existe la imagen físicamente en la carpeta assets/
         if logo_path_default.exists():
             st.image(str(logo_path_default), caption="Logo Actual Guardado", width=160)
             cfg["logo_path"] = str(logo_path_default)

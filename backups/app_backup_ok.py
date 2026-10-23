@@ -145,7 +145,7 @@ if choice == "📊 Dashboard":
     """, conn)
     if not df_hist.empty:
         fig_h = px.bar(df_hist, x='Mes', y='Total', title="Dinero Cobrado por Mes", color_discrete_sequence=['#2ecc71'])
-        st.plotly_chart(fig_h, use_container_width=True)
+        st.plotly_chart(fig_h, width="stretch")
     else:
         st.info("Aún no hay cobros marcados como 'Pagado' para mostrar en el historial.")
 
@@ -156,7 +156,7 @@ if choice == "📊 Dashboard":
     """, conn)
     if not df_mes.empty:
         fig = px.line(df_mes, x='Mes', y='Total', title="Flujo de Caja Pendiente", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 elif choice == "🗓️ Cobros Pendientes":
     st.title("Control de Cobros")
@@ -220,7 +220,7 @@ elif choice == "🗓️ Cobros Pendientes":
 elif choice == "👥 Gestión de Clientes":
     st.title("Base de Datos de Clientes")
     df_c = pd.read_sql_query("SELECT id, nombre, apodo as Empresa, telefono FROM clientes", conn)
-    edited_c = st.data_editor(df_c, use_container_width=True, hide_index=True, num_rows="dynamic")
+    edited_c = st.data_editor(df_c, width="stretch", hide_index=True, num_rows="dynamic")
     if st.button("💾 Actualizar Clientes"):
         for _, r in edited_c.iterrows():
             conn.execute("UPDATE clientes SET nombre=?, apodo=?, telefono=? WHERE id=?", (r['nombre'], r['Empresa'], r['telefono'], r['id']))
@@ -242,7 +242,7 @@ elif choice == "📝 Órdenes de Trabajo":
     """, conn)
     
     if not df_ot.empty:
-        st.dataframe(df_ot.drop(columns=['Tel']), use_container_width=True, hide_index=True)
+        st.dataframe(df_ot.drop(columns=['Tel']), width="stretch", hide_index=True)
         ot_sel = st.selectbox("Seleccione OT:", df_ot['OT'])
         if st.button("Generar Mensaje de OT"):
             r = df_ot[df_ot['OT'] == ot_sel].iloc[0]
@@ -261,7 +261,7 @@ elif choice == "✅ Historial de Cobrados":
         JOIN negocios n ON o.negocio_id = n.id WHERE p.estado_pago = 'Pagado' ORDER BY Fecha DESC
     """, conn)
     if not df_h.empty:
-        st.dataframe(df_h, use_container_width=True, hide_index=True)
+        st.dataframe(df_h, width="stretch", hide_index=True)
     else:
         st.info("El historial está vacío. Los pagos aparecerán aquí una vez que los confirmes en 'Cobros Pendientes'.")
 
